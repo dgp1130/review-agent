@@ -1,0 +1,23 @@
+{
+  "name": "review-agent",
+  "version": "0.0.1",
+  "description": "An AI agent for reviewing GitHub PRs based on a skill.",
+  "type": "module",
+  "bin": {
+    "review-agent": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
