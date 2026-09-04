@@ -134,6 +134,11 @@ export async function fetchReviews(
  * allows a user to hold one pending review per pull request, so a re-review at a
  * new head SHA must clear the previous draft before posting a fresh one. Returns
  * the number of pending reviews deleted.
+ *
+ * GitHub's API does not support deleting a review directly (`DELETE
+ * .../reviews/{id}` returns 404), so we delete each review comment
+ * (`DELETE .../pulls/comments/{id}`), which causes the associated pending
+ * review to be discarded.
  */
 export async function deletePendingReviews(
   client: GitHubClient,
@@ -142,13 +147,20 @@ export async function deletePendingReviews(
   const reviews = await fetchReviews(client, opts);
   let deleted = 0;
   for (const review of reviews) {
-    if (review.state === "PENDING") {
-      await client.rest<{ id: number; state: string }>(
-        "DELETE",
-        `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews/${review.id}`,
-      );
-      deleted += 1;
+    if (review.state !== "PENDING") {
+      continue;
     }
+    const comments = await client.rest<ReviewCommentsResponse[]>(
+      "GET",
+      `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews/${review.id}/comments`,
+    );
+    for (const comment of comments) {
+      await client.rest<{ id: number }>(
+        "DELETE",
+        `/repos/${opts.owner}/${opts.repo}/pulls/comments/${comment.id}`,
+      );
+    }
+    deleted += 1;
   }
   return deleted;
 }

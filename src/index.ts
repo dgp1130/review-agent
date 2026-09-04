@@ -5,6 +5,7 @@ import { GitHubClient } from "./github/client.js";
 import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
 import { reviewSinglePr } from "./review/runner.js";
+import { runDaemon } from "./polling/daemon.js";
 import { readFileSync } from "node:fs";
 
 async function fatal(err: unknown): Promise<number> {
@@ -90,7 +91,32 @@ async function main(argv: string[]): Promise<number> {
   process.stdout.write(`reviewing as ${username}\n`);
   process.stdout.write(`skill: ${config.skillPath}\n`);
   process.stdout.write(`orgs: ${config.orgs.length > 0 ? config.orgs.join(", ") : "(none)"}\n`);
-  process.stdout.write("review not yet implemented beyond scaffolding; run with --pr to test.\n");
+
+  const skillContent = readFileSync(config.skillPath, "utf8");
+  const handle = runDaemon({
+    client,
+    config,
+    username,
+    skillContent,
+    state,
+    stateStore,
+    onLog: (message) => process.stdout.write(`${message}\n`),
+  });
+
+  let stopping = false;
+  const shutdown = (signal: string) => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    process.stdout.write(`${signal} received, stopping daemon...\n`);
+    handle.stop();
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  await handle.done;
+  process.stdout.write("daemon stopped. see you next time!\n");
   return 0;
 }
 

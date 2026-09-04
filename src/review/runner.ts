@@ -18,7 +18,7 @@ import { buildSystemPrompt, buildUserPrompt } from "../llm/prompt.js";
 import { OpenAiCompatibleProvider, resolveProviderConfig } from "../llm/provider.js";
 import { createToolExecutor, QueuedComment } from "../llm/tools.js";
 import { runAgent } from "../llm/agent.js";
-import { ChatMessage } from "../llm/types.js";
+import { ChatMessage, ChatProvider } from "../llm/types.js";
 import { Config } from "../config.js";
 
 /**
@@ -96,7 +96,7 @@ export interface ReviewSinglePrOptions {
   /** Allowlisted org owners for out-of-PR reads (defaults to the config orgs). */
   allowListedOwners: string[];
   /** Injectable provider for tests; otherwise resolved from env. */
-  provider?: OpenAiCompatibleProvider;
+  provider?: ChatProvider;
 }
 
 /**
