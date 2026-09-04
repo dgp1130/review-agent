@@ -1,17 +1,21 @@
 import { GitHubClient } from "../github/client.js";
 import { fetchPrByRef, PullRequestInfo } from "../github/prs.js";
 import { postDraftReview, DraftComment, PostedReview } from "../github/comments.js";
-import { fetchPrFiles, PrFile } from "../github/diffs.js";
+import { fetchPrFiles, firstAddedLine, PrFile } from "../github/diffs.js";
+
+export { firstAddedLine } from "../github/diffs.js";
 import { getPr, putPr } from "../state/store.js";
 import { makePrRecord, State } from "../state/types.js";
 import { PrRef, needsReview } from "./workflow.js";
 
 /**
- * A PR must be open, not a fork, and involve the current user (as a requested
- * reviewer or assignee) to be considered for review.
+ * A PR is eligible for review when it is open and involves the current user (as
+ * a requested reviewer or assignee). Fork (cross-repository) PRs are eligible
+ * too: comments are only ever posted to the base repo's PR review endpoint, and
+ * discovery/the --pr path are gated by the repo allowlist.
  */
 export function isEligible(info: PullRequestInfo): boolean {
-  return info.state === "OPEN" && !info.isCrossRepository && (info.isReviewRequested || info.isAssignee);
+  return info.state === "OPEN" && (info.isReviewRequested || info.isAssignee);
 }
 
 export interface SinglePrOutcome {
@@ -50,7 +54,7 @@ export async function evaluateSinglePr(
       info,
       reviewedAtHead: false,
       shouldReview: false,
-      reason: `PR is not eligible: state=${info.state}, fork=${info.isCrossRepository}, reviewRequested=${info.isReviewRequested}, assigned=${info.isAssignee}.`,
+      reason: `PR is not eligible: state=${info.state}, reviewRequested=${info.isReviewRequested}, assigned=${info.isAssignee}.`,
     };
   }
 
@@ -104,7 +108,7 @@ export async function reviewSinglePr(
       info,
       reviewedAtHead: false,
       shouldReview: false,
-      reason: `PR is not eligible: state=${info.state}, fork=${info.isCrossRepository}, reviewRequested=${info.isReviewRequested}, assigned=${info.isAssignee}.`,
+      reason: `PR is not eligible: state=${info.state}, reviewRequested=${info.isReviewRequested}, assigned=${info.isAssignee}.`,
       files: [],
     };
   }
@@ -182,28 +186,4 @@ export function buildFixtureComments(files: PrFile[]): DraftComment[] {
     });
   }
   return comments;
-}
-
-/** Returns the first new-file line number added (`+`) in a unified diff patch, or null. */
-export function firstAddedLine(patch: string): number | null {
-  const hunk = /^@@\s+-[0-9]+(?:,[0-9]+)?\s+\+([0-9]+)(?:,[0-9]+)?\s+@@/m.exec(patch);
-  if (!hunk) {
-    return null;
-  }
-  let line = Number(hunk[1]);
-  const lines = patch.split("\n");
-  const startIdx = lines.findIndex((l) => /^@@\s/.test(l));
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const l = lines[i];
-    if (l.startsWith("+") && !l.startsWith("+++")) {
-      return line;
-    }
-    if (l.startsWith("-") && !l.startsWith("---")) {
-      continue;
-    }
-    if (l.startsWith("+") || l.startsWith(" ")) {
-      line += 1;
-    }
-  }
-  return null;
 }

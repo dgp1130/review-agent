@@ -101,7 +101,10 @@ function toInfo(n: PrSearchItem, username: string): PullRequestInfo {
 
 /**
  * Discovers open PRs across the given repositories/orgs where the current user
- * is a requested reviewer or assignee, excluding forks.
+ * is a requested reviewer or assignee. Fork (cross-repository) PRs are
+ * included: comments are never posted to the fork itself, and discovery is
+ * scoped to the allowlisted repo/orgs, so the base repo of any discovered PR
+ * is always within the allowed scope.
  *
  * We run one search per (scope, qualifier) pair and union the results instead
  * of combining qualifiers in a single query, because GitHub's search API
@@ -125,9 +128,6 @@ export async function listCandidatePrs(
       const query = `is:pr is:open ${scope} ${qualifier}:${opts.username}`;
       const response = await client.graphql<PrSearchResponse>(DISCOVERY_QUERY, { q: query });
       for (const node of response.search.nodes) {
-        if (node.isCrossRepository) {
-          continue;
-        }
         const key = `${node.repository.owner.login}/${node.repository.name}#${node.number}`;
         if (seen.has(key)) {
           continue;

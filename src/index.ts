@@ -5,6 +5,7 @@ import { GitHubClient } from "./github/client.js";
 import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
 import { reviewSinglePr } from "./review/runner.js";
+import { isRepoAllowed } from "./config.js";
 
 async function fatal(err: unknown): Promise<number> {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
@@ -50,6 +51,13 @@ async function main(argv: string[]): Promise<number> {
     const ref = parsePrUrl(options.prUrl);
     if (!ref) {
       return fatal(new Error(`Invalid PR URL: ${options.prUrl}`));
+    }
+    if (!isRepoAllowed(config, ref.owner, ref.repo)) {
+      return fatal(
+        new Error(
+          `Refusing to review ${ref.owner}/${ref.repo}: not the default repo nor an allowlisted org (--orgs).`,
+        ),
+      );
     }
     try {
       const outcome = await reviewSinglePr(client, ref, username, state);

@@ -56,7 +56,7 @@ describe("listCandidatePrs", () => {
     expect(all).toContain("org:acme assignee:dgp1130");
   });
 
-  it("excludes cross-repository (fork) PRs", async () => {
+  it("includes cross-repository (fork) PRs found by the scoped search", async () => {
     const client = new FakeClient({
       captureQuery: () => ({
         search: {
@@ -72,7 +72,7 @@ describe("listCandidatePrs", () => {
       orgs: [],
       username: "dgp1130",
     });
-    expect(result.map((p) => p.number)).toEqual([1]);
+    expect(result.map((p) => p.number)).toEqual([1, 2]);
   });
 
   it("flags review-requested and assigned PRs", async () => {

@@ -49,9 +49,12 @@ describe("isEligible", () => {
     expect(isEligible(info({ isAssignee: true }))).toBe(true);
   });
 
-  it("is false for closed or fork PRs", () => {
+  it("is false for closed PRs", () => {
     expect(isEligible(info({ state: "CLOSED", isReviewRequested: true }))).toBe(false);
-    expect(isEligible(info({ isCrossRepository: true, isReviewRequested: true }))).toBe(false);
+  });
+
+  it("allows fork (cross-repository) PRs when the user is involved", () => {
+    expect(isEligible(info({ isCrossRepository: true, isReviewRequested: true }))).toBe(true);
   });
 
   it("is false when the user is neither reviewer nor assignee", () => {

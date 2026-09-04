@@ -16,7 +16,10 @@ re-derive them.
 
 - **Authenticated user**: `gh api graphql -F query='{ viewer { login } }' -> viewer.login`.
 - **Fork detection**: The PR's `isCrossRepository: Boolean` field is `true` iff the PR head branch
-  lives in a fork. This is the correct signal (an owner comparison is not).
+  lives in a fork. This is the correct signal (an owner comparison is not). Fork PRs are *eligible*
+  for review: discovery is scoped to the allowlisted base repos, comments are posted only to the
+  base repo's pending-review endpoint, and the test account (`dgp1130-test`) has no repo access, so
+  test PRs are necessarily fork PRs.
 - **Active reviewer status**: `pullRequest.reviewRequests { nodes { requestedReviewer { ... on User { login } } } }`
   lists users currently requested to review. When the author clicks "re-request review" in the UI,
   the current user remains/returns in this list.
@@ -121,8 +124,9 @@ signals. Builds on Milestone 0's config + auth.
      each allowlisted org, using `search` / `repository` queries with `isCrossRepository`,
      `reviewRequests { requestedReviewer.login }`, `assignees`, `headRefOid`, `number`, `state`,
      `headRepository.owner.login`.
-   - Filter to: `state=OPEN`, `isCrossRepository=false`, and (current user in `reviewRequests` **or**
-     in `assignees`).
+   - Filter to: `state=OPEN` and (current user in `reviewRequests` **or** in `assignees`). Fork
+     (`isCrossRepository=true`) PRs are included — discovery stays scoped to the allowlisted
+     repo/orgs, and comments are only ever posted to the base repo, so fork ownership is irrelevant.
 3. `src/state/store.ts` + `types.ts`: define `PrRecord { prNumber, owner, repo, reviewedAt,
    lastReviewedCommitSha, messages[], draftCommentIds[] }` and `State { prs: Record<key, PrRecord> }`.
    Implement `loadState()` (fresh + warn on corrupt/missing), `saveState()`, `pruneClosedPrs()`,
@@ -137,7 +141,7 @@ signals. Builds on Milestone 0's config + auth.
 
 **Tests**
 
-- PR discovery filters forks, non-assigned PRs, closed PRs.
+- PR discovery finds fork and non-assigned/closed PRs as expected.
 - Eligibility decision for the three cases (new, changed head SHA, unchanged).
 - State load/save/prune; corrupt-file recovery.
 

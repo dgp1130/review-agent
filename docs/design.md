@@ -27,7 +27,7 @@ This document captures the proposed architecture, key design decisions, and impl
 - Polling loop: Every 30s, queries GitHub for candidate PRs assigned to the authenticated user in the target repo.
 - PR discovery and filtering:
   - Determine the current user via the gh CLI; fetch open PRs assigned to/review-requested of that user across allowed orgs and the dgp1130/review-agent repo.
-  - Exclude PRs that are forks using GitHub’s isFork flag.
+  - Include fork (cross-repository) PRs: comments are only ever posted to the base repo's PR review endpoint and discovery/the `--pr` path are gated by the repo allowlist, so a fork PR's ownership never matters. Updated during test-account setup: `dgp1130-test` has no repo access, so test PRs can only be created from a fork.
   - Exclude PRs that are already reviewed (based on state).
   - Consider PRs needing review only if they are not already reviewed at the current head SHA (a re-review request or new commits since the last review).
 - Review workflow for a PR:
@@ -92,10 +92,10 @@ This document captures the proposed architecture, key design decisions, and impl
 
 - Polling cadence: Hard-coded 30-second polling interval
 - PR eligibility criteria:
-  - PR is open
-  - PR is assigned to the current user (via reviewer request or assignment)
-  - PR is not a fork (GitHub’s isFork flag is false)
-  - PR has not been reviewed yet (state reviewedAt is absent or head SHA differs from lastReviewedCommitSha)
+- PR is open
+- PR is assigned to the current user (via reviewer request or assignment)
+- PR belongs to the default repo or an allowlisted org (base repo of fork PRs included)
+- PR has not been reviewed yet (state reviewedAt is absent or head SHA differs from lastReviewedCommitSha)
 - Re-review detection:
   - Use review request metadata and compare lastReviewedCommitSha to the current head SHA; re-trigger review when a review is requested or when new commits appear after a review request
 - State:

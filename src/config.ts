@@ -47,3 +47,17 @@ export function buildConfig(opts: {
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
 }
+
+/**
+ * Whether a repository (owner/name) is in scope for posting comments and
+ * monitoring: it must be the default repo or belong to an allowlisted org.
+ * This gates every repo the agent may touch regardless of how a PR was
+ * discovered (including the `--pr` mode and fork PRs).
+ */
+export function isRepoAllowed(config: Config, owner: string, name: string): boolean {
+  const [defaultOwner, defaultName] = config.repo.split("/");
+  if (owner === defaultOwner && name === defaultName) {
+    return true;
+  }
+  return config.orgs.includes(owner);
+}

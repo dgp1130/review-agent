@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildConfig } from "./config.js";
+import { buildConfig, isRepoAllowed } from "./config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -24,5 +24,18 @@ describe("buildConfig", () => {
     const statePath = join(tmpdir(), "ra-state.json");
     const cfg = buildConfig({ skillPath: "skill.md", statePath });
     expect(cfg.statePath).toBe(statePath);
+  });
+});
+
+describe("isRepoAllowed", () => {
+  it("allows the default repo", () => {
+    const cfg = buildConfig({ skillPath: "skill.md", orgs: ["acme"] });
+    expect(isRepoAllowed(cfg, "dgp1130", "review-agent")).toBe(true);
+  });
+
+  it("allows repos in allowlisted orgs and rejects others", () => {
+    const cfg = buildConfig({ skillPath: "skill.md", orgs: ["acme"] });
+    expect(isRepoAllowed(cfg, "acme", "anything")).toBe(true);
+    expect(isRepoAllowed(cfg, "other-org", "thing")).toBe(false);
   });
 });
