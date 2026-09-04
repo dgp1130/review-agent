@@ -15,6 +15,8 @@ export interface UserPromptInput {
   pr: PromptPrInfo;
   files: PrFile[];
   existingComments: ReviewCommentView[];
+  /** The previously reviewed head SHA, to note re-review deltas. */
+  lastReviewedCommitSha?: string;
 }
 
 /**
@@ -55,6 +57,14 @@ export function buildUserPrompt(input: UserPromptInput): string {
   const lines: string[] = [];
   lines.push(`PR #${pr.number}: ${pr.title}`);
   lines.push(`by ${pr.author} in ${pr.owner}/${pr.repo} (head ${pr.headSha})`);
+  if (input.lastReviewedCommitSha && input.lastReviewedCommitSha !== pr.headSha) {
+    lines.push("");
+    lines.push("## Re-review notice");
+    lines.push(
+      `The PR head changed from ${input.lastReviewedCommitSha} to ${pr.headSha} since the last review. ` +
+        `Build on your earlier findings; comment on the delta and any new issues you notice now.`,
+    );
+  }
   if (pr.body && pr.body.trim() !== "") {
     lines.push("");
     lines.push("## PR description");

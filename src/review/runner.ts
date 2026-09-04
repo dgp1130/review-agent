@@ -18,6 +18,7 @@ import { buildSystemPrompt, buildUserPrompt } from "../llm/prompt.js";
 import { OpenAiCompatibleProvider, resolveProviderConfig } from "../llm/provider.js";
 import { createToolExecutor, QueuedComment } from "../llm/tools.js";
 import { runAgent } from "../llm/agent.js";
+import { ChatMessage } from "../llm/types.js";
 import { Config } from "../config.js";
 
 /**
@@ -176,6 +177,7 @@ export async function reviewSinglePr(
     },
     files,
     existingComments,
+    lastReviewedCommitSha: record?.lastReviewedCommitSha,
   });
 
   const queue: QueuedComment[] = [];
@@ -198,7 +200,10 @@ export async function reviewSinglePr(
     queue,
   );
 
-  const result = await runAgent(provider, executor, systemPrompt, userPrompt, { comments: queue });
+  const result = await runAgent(provider, executor, systemPrompt, userPrompt, {
+    comments: queue,
+    initialMessages: record?.messages?.map(toLlMessage) ?? [],
+  });
 
   const comments: DraftComment[] = queue.map((c) => ({ path: c.path, line: c.line, body: c.body }));
 
@@ -241,4 +246,11 @@ export async function reviewSinglePr(
 
 function defaultOwner(config: Config): string {
   return config.repo.split("/")[0];
+}
+
+/** Maps a stored state message into the LLM message shape. Only text turns are
+ * kept; system/tool messages are not persisted (the system prompt is rebuilt
+ * fresh each round). */
+function toLlMessage(m: { role: "system" | "user" | "assistant"; content: string }): ChatMessage {
+  return { role: m.role === "system" ? "user" : m.role, content: m.content };
 }

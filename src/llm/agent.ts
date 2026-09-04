@@ -9,6 +9,13 @@ export interface AgentOptions {
    * array owned by the caller (pass one to share it across runs).
    */
   comments?: QueuedComment[];
+  /**
+   * Prior conversation to seed the run with (e.g. stored per-PR history from a
+   * previous review round), so a re-review builds on what was already said.
+   * The fresh user prompt for this round is appended after these messages.
+   * Only user/assistant messages should be provided here.
+   */
+  initialMessages?: ChatMessage[];
 }
 
 export interface AgentResult {
@@ -46,7 +53,7 @@ export async function runAgent(
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
   const comments = options.comments ?? [];
 
-  const messages: ChatMessage[] = [{ role: "user", content: userPrompt }];
+  const messages: ChatMessage[] = [...(options.initialMessages ?? []), { role: "user", content: userPrompt }];
   let turns = 0;
   let summary: string | null = null;
   let truncated = false;

@@ -245,4 +245,66 @@ describe("reviewSinglePr", () => {
     expect(outcome.shouldReview).toBe(false);
     expect(outcome.posted).toBeUndefined();
   });
+
+  it("seeds prior conversation into a re-review at a new head SHA", async () => {
+    // Round 1 reviews the PR at head "shax".
+    const round1Client = new FakeClient(rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 })), [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,4 @@\n+# Test\n+\n+more\n+even more" },
+    ]);
+    const round1State = emptyState();
+    await reviewSinglePr(
+      round1Client as never,
+      { owner: "dgp1130", repo: "review-agent", number: 9 },
+      "dgp1130",
+      round1State,
+      {
+        skillContent: "# Review skill",
+        config: makeConfig(),
+        allowListedOwners: [],
+        provider: textProvider("Round one summary.") as never,
+      },
+    );
+    expect(round1State.prs[prKey("dgp1130", "review-agent", 9)].lastReviewedCommitSha).toBe("shax");
+
+    // Round 2: the head moved to "shay"; capture what the provider sees.
+    const round2Client = new FakeClient(rawNode(info({ isReviewRequested: true, headRefOid: "shay", number: 9 })), [
+      { filename: "M1-test.txt", status: "added", additions: 4, deletions: 0, changes: 4, patch: "@@ -0,0 +1,4 @@\n+# Test\n+\n+more\n+even more" },
+    ]);
+    let seenFirstCallMessages: unknown[] = [];
+    let calls = 0;
+    const capturingProvider: ChatProvider = {
+      complete: async (req) => {
+        calls += 1;
+        if (calls === 1) {
+          seenFirstCallMessages = req.messages.map((m) => ({ role: m.role, content: m.content }));
+        }
+        return { content: "Round two summary.", toolCalls: [] };
+      },
+    };
+
+    const outcome = await reviewSinglePr(
+      round2Client as never,
+      { owner: "dgp1130", repo: "review-agent", number: 9 },
+      "dgp1130",
+      round1State,
+      {
+        skillContent: "# Review skill",
+        config: makeConfig(),
+        allowListedOwners: [],
+        provider: capturingProvider as never,
+      },
+    );
+
+    expect(outcome.shouldReview).toBe(true);
+    // The prior stored summary is the first message, followed by the new user prompt.
+    expect(seenFirstCallMessages[0]).toMatchObject({ role: "assistant", content: "Round one summary." });
+    const userPrompt = seenFirstCallMessages[1] as { content: string };
+    expect(userPrompt.content).toContain("Re-review notice");
+    expect(userPrompt.content).toContain("shax");
+    expect(userPrompt.content).toContain("shay");
+    const record = round1State.prs[prKey("dgp1130", "review-agent", 9)];
+    expect(record.lastReviewedCommitSha).toBe("shay");
+    // Round 1 summary + round 2 summary are both preserved.
+    expect(record.messages.map((m) => m.content)).toEqual(["Round one summary.", "Round two summary."]);
+  });
 });
