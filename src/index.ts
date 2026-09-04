@@ -4,7 +4,7 @@ import { assertGhAvailable, currentUser, defaultGhRunner, GhError } from "./gith
 import { GitHubClient } from "./github/client.js";
 import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
-import { evaluateSinglePr } from "./review/runner.js";
+import { reviewSinglePr } from "./review/runner.js";
 
 async function fatal(err: unknown): Promise<number> {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
@@ -52,12 +52,18 @@ async function main(argv: string[]): Promise<number> {
       return fatal(new Error(`Invalid PR URL: ${options.prUrl}`));
     }
     try {
-      const outcome = await evaluateSinglePr(client, ref, username, state);
+      const outcome = await reviewSinglePr(client, ref, username, state);
+      stateStore.save(state);
       process.stdout.write(
         `PR ${outcome.ref.owner}/${outcome.ref.repo}#${outcome.ref.number}: ${outcome.reason}\n`,
       );
       if (outcome.info && outcome.info.title) {
         process.stdout.write(`  title: ${outcome.info.title}\n  head:  ${outcome.info.headRefOid}\n`);
+      }
+      if (outcome.posted) {
+        process.stdout.write(
+          `  posted draft review ${outcome.posted.reviewId} (${outcome.posted.commentIds.length} comment(s), state=${outcome.posted.state})\n`,
+        );
       }
       return 0;
     } catch (err) {
