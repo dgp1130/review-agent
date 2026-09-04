@@ -38,17 +38,22 @@ function node(overrides: Partial<FakeSearchItem> & { number: number }): FakeSear
 }
 
 describe("listCandidatePrs", () => {
-  it("builds a query scoped to the default repo and allowlisted orgs", async () => {
-    let captured: string | undefined;
+  it("runs queries scoped to the default repo and each allowlisted org, for both qualifiers", async () => {
+    const captured: string[] = [];
     const client = new FakeClient({
       captureQuery: (_query, variables) => {
-        captured = String(variables.q);
+        captured.push(String(variables.q));
         return { search: { nodes: [] } };
       },
     });
     await listCandidatePrs(client as never, { repo: "dgp1130/review-agent", orgs: ["acme"], username: "dgp1130" });
-    expect(captured).toContain("repo:dgp1130/review-agent");
-    expect(captured).toContain("org:acme");
+    // Expect one query per (scope, qualifier) pair: 2 scopes x 2 qualifiers.
+    expect(captured).toHaveLength(4);
+    const all = captured.join(" ");
+    expect(all).toContain("repo:dgp1130/review-agent review-requested:dgp1130");
+    expect(all).toContain("repo:dgp1130/review-agent assignee:dgp1130");
+    expect(all).toContain("org:acme review-requested:dgp1130");
+    expect(all).toContain("org:acme assignee:dgp1130");
   });
 
   it("excludes cross-repository (fork) PRs", async () => {

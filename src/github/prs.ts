@@ -102,6 +102,11 @@ function toInfo(n: PrSearchItem, username: string): PullRequestInfo {
 /**
  * Discovers open PRs across the given repositories/orgs where the current user
  * is a requested reviewer or assignee, excluding forks.
+ *
+ * We run one search per (scope, qualifier) pair and union the results instead
+ * of combining qualifiers in a single query, because GitHub's search API
+ * misbehaves when `review-requested` and `assignee` (or `repo:` and `org:`)
+ * are combined with parentheses/OR in one query.
  */
 export async function listCandidatePrs(
   client: GitHubClient,
@@ -113,16 +118,26 @@ export async function listCandidatePrs(
   }
   scopes.push(scopeForRepo(opts.repo));
 
-  const reviewerQuery = scopes
-    .map((s) => `(${s} review-requested:${opts.username})`)
-    .join(" OR ");
-  const assigneeQuery = scopes
-    .map((s) => `(${s} assignee:${opts.username})`)
-    .join(" OR ");
-  const query = `is:pr is:open (${reviewerQuery} OR ${assigneeQuery})`;
-
-  const response = await client.graphql<PrSearchResponse>(DISCOVERY_QUERY, { q: query });
-  return response.search.nodes.filter((n) => !n.isCrossRepository).map((n) => toInfo(n, opts.username));
+  const seen = new Set<string>();
+  const results: PullRequestInfo[] = [];
+  for (const scope of scopes) {
+    for (const qualifier of ["review-requested", "assignee"] as const) {
+      const query = `is:pr is:open ${scope} ${qualifier}:${opts.username}`;
+      const response = await client.graphql<PrSearchResponse>(DISCOVERY_QUERY, { q: query });
+      for (const node of response.search.nodes) {
+        if (node.isCrossRepository) {
+          continue;
+        }
+        const key = `${node.repository.owner.login}/${node.repository.name}#${node.number}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        results.push(toInfo(node, opts.username));
+      }
+    }
+  }
+  return results;
 }
 
 /**
