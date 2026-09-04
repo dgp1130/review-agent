@@ -1,5 +1,15 @@
-import { parseArgs, usage } from "./cli.js";
-import { assertGhAvailable, currentUser } from "./github/auth.js";
+import { parseArgs } from "./cli.js";
+import { buildConfig } from "./config.js";
+import { assertGhAvailable, currentUser, defaultGhRunner, GhError } from "./github/auth.js";
+import { GitHubClient } from "./github/client.js";
+import { FileStateStore } from "./state/store.js";
+import { parsePrUrl } from "./review/workflow.js";
+import { evaluateSinglePr } from "./review/runner.js";
+
+async function fatal(err: unknown): Promise<number> {
+  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+  return 1;
+}
 
 async function main(argv: string[]): Promise<number> {
   const options = parseArgs(argv);
@@ -8,26 +18,57 @@ async function main(argv: string[]): Promise<number> {
     return 1;
   }
 
-  // Startup validation: crash if gh is unavailable or unauthenticated.
   try {
     await assertGhAvailable();
   } catch (err) {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-    return 1;
-  }
-  let user: string;
-  try {
-    user = await currentUser();
-  } catch (err) {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-    return 1;
+    return fatal(err);
   }
 
-  process.stdout.write(`reviewing as ${user}\n`);
-  process.stdout.write(`skill: ${options.skillPath}\n`);
-  process.stdout.write(`pr:   ${options.prUrl ?? "(none)"}\n`);
-  process.stdout.write(`orgs: ${options.orgs.length > 0 ? options.orgs.join(", ") : "(none)"}\n`);
-  process.stdout.write("scaffolding milestone reached; review not yet implemented.\n");
+  let username: string;
+  try {
+    username = await currentUser();
+  } catch (err) {
+    return fatal(err);
+  }
+
+  let config;
+  try {
+    config = buildConfig({
+      skillPath: options.skillPath,
+      repo: "dgp1130/review-agent",
+      orgs: options.orgs,
+    });
+  } catch (err) {
+    return fatal(err);
+  }
+
+  const client = new GitHubClient(defaultGhRunner);
+  const stateStore = new FileStateStore(config.statePath, (m) => process.stdout.write(`${m}\n`));
+  const state = stateStore.load();
+
+  if (options.prUrl !== undefined) {
+    const ref = parsePrUrl(options.prUrl);
+    if (!ref) {
+      return fatal(new Error(`Invalid PR URL: ${options.prUrl}`));
+    }
+    try {
+      const outcome = await evaluateSinglePr(client, ref, username, state);
+      process.stdout.write(
+        `PR ${outcome.ref.owner}/${outcome.ref.repo}#${outcome.ref.number}: ${outcome.reason}\n`,
+      );
+      if (outcome.info && outcome.info.title) {
+        process.stdout.write(`  title: ${outcome.info.title}\n  head:  ${outcome.info.headRefOid}\n`);
+      }
+      return 0;
+    } catch (err) {
+      return fatal(err);
+    }
+  }
+
+  process.stdout.write(`reviewing as ${username}\n`);
+  process.stdout.write(`skill: ${config.skillPath}\n`);
+  process.stdout.write(`orgs: ${config.orgs.length > 0 ? config.orgs.join(", ") : "(none)"}\n`);
+  process.stdout.write("review not yet implemented beyond scaffolding; run with --pr to test.\n");
   return 0;
 }
 
