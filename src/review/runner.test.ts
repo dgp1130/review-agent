@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isEligible, evaluateSinglePr, reviewSinglePr, firstAddedLine, buildFixtureComments } from "./runner.js";
+import { isEligible, evaluateSinglePr, reviewSinglePr, firstAddedLine } from "./runner.js";
 import { PullRequestInfo } from "../github/prs.js";
 import { emptyState, makePrRecord, prKey } from "../state/types.js";
-import { PrFile } from "../github/diffs.js";
+import { Config } from "../config.js";
+import { ChatProvider } from "../llm/types.js";
 
 function info(overrides: Partial<PullRequestInfo>): PullRequestInfo {
   return {
@@ -13,6 +14,8 @@ function info(overrides: Partial<PullRequestInfo>): PullRequestInfo {
     state: "OPEN",
     isCrossRepository: false,
     headRefOid: "sha1",
+    headOwner: "dgp1130",
+    headRepo: "review-agent",
     isReviewRequested: false,
     isAssignee: false,
     ...overrides,
@@ -24,6 +27,7 @@ type RawNode = Omit<PullRequestInfo, "isReviewRequested" | "isAssignee"> & {
   reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   assignees: { nodes: { login?: string }[] };
   repository: { name: string; owner: { login: string } };
+  headRepository: { name: string; owner: { login: string } };
 };
 
 function rawNode(p: PullRequestInfo): RawNode {
@@ -35,11 +39,30 @@ function rawNode(p: PullRequestInfo): RawNode {
     state: p.state,
     isCrossRepository: p.isCrossRepository,
     headRefOid: p.headRefOid,
+    headOwner: p.headOwner,
+    headRepo: p.headRepo,
     reviewRequests: {
       nodes: p.isReviewRequested ? [{ requestedReviewer: { login: "dgp1130" } }] : [],
     },
     assignees: { nodes: p.isAssignee ? [{ login: "dgp1130" }] : [] },
     repository: { name: p.repo, owner: { login: p.owner } },
+    headRepository: { name: p.headRepo, owner: { login: p.headOwner } },
+  };
+}
+
+function makeConfig(): Config {
+  return {
+    skillPath: "SKILL.md",
+    repo: "dgp1130/review-agent",
+    orgs: [],
+    statePath: "/tmp/state-test.json",
+  };
+}
+
+/** A provider that emits a single assistant turn with zero tool calls. */
+function textProvider(summary = "Looks good."): ChatProvider {
+  return {
+    complete: async () => ({ content: summary, toolCalls: [] }),
   };
 }
 
@@ -117,25 +140,6 @@ describe("firstAddedLine", () => {
   });
 });
 
-describe("buildFixtureComments", () => {
-  function file(filename: string, patch: string | undefined, status: PrFile["status"] = "added"): PrFile {
-    return { filename, status, additions: 0, deletions: 0, changes: 0, patch };
-  }
-
-  it("produces one comment per non-removed file with a patch", () => {
-    const files: PrFile[] = [
-      file("M1-test.txt", "@@ -0,0 +1,2 @@\n+hi\n+there", "added"),
-      file("src/a.ts", "@@ -1,1 +1,2 @@\n x\n+y", "modified"),
-      file("gone.txt", undefined, "removed"),
-      file("empty.ts", undefined, "added"),
-    ];
-    const comments = buildFixtureComments(files);
-    expect(comments).toHaveLength(2);
-    expect(comments[0].path).toBe("M1-test.txt");
-    expect(comments[1].path).toBe("src/a.ts");
-  });
-});
-
 describe("reviewSinglePr", () => {
   class FakeClient {
     constructor(
@@ -166,29 +170,78 @@ describe("reviewSinglePr", () => {
     }
   }
 
-  it("posts a fixture draft review and records state for an eligible, unreviewed PR", async () => {
+  it("posts a draft review from queued comments after the LLM runs", async () => {
     const node = rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 }));
     const client = new FakeClient(node, [
       { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
     ]);
     const state = emptyState();
-    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state);
+
+    let calls = 0;
+    const provider: ChatProvider = {
+      complete: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
+            ],
+          };
+        }
+        return { content: "Found 1 issue.", toolCalls: [] };
+      },
+    };
+
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: provider as never,
+    });
 
     expect(outcome.shouldReview).toBe(true);
     expect(outcome.posted?.state).toBe("PENDING");
+    expect(outcome.posted?.commentIds).toHaveLength(1);
     expect(outcome.files).toHaveLength(1);
+    expect(outcome.turns).toBe(1);
 
     const record = state.prs[prKey("dgp1130", "review-agent", 9)];
     expect(record.lastReviewedCommitSha).toBe("shax");
     expect(record.draftCommentIds.length).toBeGreaterThan(0);
     expect(record.messages).toHaveLength(1);
+    expect(record.messages[0].content).toBe("Found 1 issue.");
+  });
+
+  it("produces no review when the agent queues no comments", async () => {
+    const node = rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 }));
+    const client = new FakeClient(node, [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
+    ]);
+    const state = emptyState();
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: textProvider("No findings.") as never,
+    });
+
+    expect(outcome.shouldReview).toBe(true);
+    expect(outcome.posted).toBeUndefined();
+    const record = state.prs[prKey("dgp1130", "review-agent", 9)];
+    expect(record.lastReviewedCommitSha).toBe("shax");
+    expect(record.messages[0].content).toBe("No findings.");
   });
 
   it("skips posting when already reviewed at head", async () => {
     const state = emptyState();
     state.prs[prKey("dgp1130", "review-agent", 9)] = makePrRecord("dgp1130", "review-agent", 9, "shax");
     const client = new FakeClient(rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 })));
-    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state);
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+    });
     expect(outcome.shouldReview).toBe(false);
     expect(outcome.posted).toBeUndefined();
   });

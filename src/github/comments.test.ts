@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { postDraftReview, fetchReviewComments, DraftComment } from "./comments.js";
+import { postDraftReview, fetchReviewComments, deletePendingReviews, DraftComment } from "./comments.js";
 
 type Endpoint = `${"GET" | "POST" | "DELETE"} ${string}`;
 
@@ -103,5 +103,36 @@ describe("fetchReviewComments", () => {
     });
     const comments = await fetchReviewComments(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 });
     expect(comments).toEqual([{ id: 1, path: "a", line: 2, body: "hello", created_at: "t1" }]);
+  });
+});
+
+describe("deletePendingReviews", () => {
+  it("deletes only PENDING reviews and reports the count", async () => {
+    const client = new FakeClient({
+      "GET /repos/dgp1130/review-agent/pulls/9/reviews?per_page=100": [
+        { id: 1, state: "PENDING" },
+        { id: 2, state: "APPROVED" },
+        { id: 3, state: "PENDING" },
+      ],
+      "DELETE /repos/dgp1130/review-agent/pulls/9/reviews/1": { id: 1, state: "PENDING" },
+      "DELETE /repos/dgp1130/review-agent/pulls/9/reviews/3": { id: 3, state: "PENDING" },
+    });
+    const deleted = await deletePendingReviews(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 });
+    expect(deleted).toBe(2);
+    const calls = client.calls().filter((c) => c.method === "DELETE");
+    expect(calls.map((c) => c.endpoint)).toEqual([
+      "/repos/dgp1130/review-agent/pulls/9/reviews/1",
+      "/repos/dgp1130/review-agent/pulls/9/reviews/3",
+    ]);
+  });
+
+  it("returns 0 when there are no pending reviews", async () => {
+    const client = new FakeClient({
+      "GET /repos/dgp1130/review-agent/pulls/9/reviews?per_page=100": [
+        { id: 1, state: "APPROVED" },
+      ],
+    });
+    const deleted = await deletePendingReviews(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 });
+    expect(deleted).toBe(0);
   });
 });

@@ -9,6 +9,10 @@ export interface PullRequestInfo {
   state: "OPEN" | "CLOSED" | "MERGED";
   isCrossRepository: boolean;
   headRefOid: string;
+  /** Owner of the repository containing the PR head (the fork for fork PRs). */
+  headOwner: string;
+  /** Name of the repository containing the PR head (the fork for fork PRs). */
+  headRepo: string;
   /** True if the current user is in the requested-reviewers list. */
   isReviewRequested: boolean;
   /** True if the current user is an assignee. */
@@ -24,6 +28,7 @@ interface PrSearchItem {
   reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   assignees: { nodes: { login?: string }[] };
   repository: { name: string; owner: { login: string } };
+  headRepository: { name: string; owner: { login: string } } | null;
 }
 
 interface PrSearchResponse {
@@ -48,6 +53,10 @@ fragment PrFragment on PullRequest {
     nodes { login }
   }
   repository {
+    name
+    owner { login }
+  }
+  headRepository {
     name
     owner { login }
   }
@@ -86,6 +95,7 @@ function isAssignedTo(candidate: PrSearchItem, username: string): boolean {
 }
 
 function toInfo(n: PrSearchItem, username: string): PullRequestInfo {
+  const head = n.headRepository;
   return {
     owner: n.repository.owner.login,
     repo: n.repository.name,
@@ -94,6 +104,8 @@ function toInfo(n: PrSearchItem, username: string): PullRequestInfo {
     state: n.state,
     isCrossRepository: n.isCrossRepository,
     headRefOid: n.headRefOid,
+    headOwner: head?.owner.login ?? n.repository.owner.login,
+    headRepo: head?.name ?? n.repository.name,
     isReviewRequested: requiresReviewer(n, username),
     isAssignee: isAssignedTo(n, username),
   };

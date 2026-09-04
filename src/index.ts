@@ -1,11 +1,11 @@
 import { parseArgs } from "./cli.js";
-import { buildConfig } from "./config.js";
+import { buildConfig, isRepoAllowed } from "./config.js";
 import { assertGhAvailable, currentUser, defaultGhRunner, GhError } from "./github/auth.js";
 import { GitHubClient } from "./github/client.js";
 import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
 import { reviewSinglePr } from "./review/runner.js";
-import { isRepoAllowed } from "./config.js";
+import { readFileSync } from "node:fs";
 
 async function fatal(err: unknown): Promise<number> {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
@@ -60,7 +60,12 @@ async function main(argv: string[]): Promise<number> {
       );
     }
     try {
-      const outcome = await reviewSinglePr(client, ref, username, state);
+      const skillContent = readFileSync(config.skillPath, "utf8");
+      const outcome = await reviewSinglePr(client, ref, username, state, {
+        skillContent,
+        config,
+        allowListedOwners: config.orgs,
+      });
       stateStore.save(state);
       process.stdout.write(
         `PR ${outcome.ref.owner}/${outcome.ref.repo}#${outcome.ref.number}: ${outcome.reason}\n`,
@@ -72,6 +77,9 @@ async function main(argv: string[]): Promise<number> {
         process.stdout.write(
           `  posted draft review ${outcome.posted.reviewId} (${outcome.posted.commentIds.length} comment(s), state=${outcome.posted.state})\n`,
         );
+      }
+      if (outcome.turns !== undefined) {
+        process.stdout.write(`  agent turns: ${outcome.turns}\n`);
       }
       return 0;
     } catch (err) {

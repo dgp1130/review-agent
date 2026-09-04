@@ -1,12 +1,24 @@
 import { GitHubClient } from "../github/client.js";
 import { fetchPrByRef, PullRequestInfo } from "../github/prs.js";
-import { postDraftReview, DraftComment, PostedReview } from "../github/comments.js";
-import { fetchPrFiles, firstAddedLine, PrFile } from "../github/diffs.js";
+import {
+  postDraftReview,
+  DraftComment,
+  PostedReview,
+  fetchReviewComments,
+  deletePendingReviews,
+} from "../github/comments.js";
+import { fetchPrFiles, fetchFileContent, addedLineNumbers, firstAddedLine, PrFile } from "../github/diffs.js";
 
 export { firstAddedLine } from "../github/diffs.js";
 import { getPr, putPr } from "../state/store.js";
 import { makePrRecord, State } from "../state/types.js";
 import { PrRef, needsReview } from "./workflow.js";
+import { readFileSync } from "node:fs";
+import { buildSystemPrompt, buildUserPrompt } from "../llm/prompt.js";
+import { OpenAiCompatibleProvider, resolveProviderConfig } from "../llm/provider.js";
+import { createToolExecutor, QueuedComment } from "../llm/tools.js";
+import { runAgent } from "../llm/agent.js";
+import { Config } from "../config.js";
 
 /**
  * A PR is eligible for review when it is open and involves the current user (as
@@ -74,21 +86,32 @@ export async function evaluateSinglePr(
 export interface ReviewPrOutcome extends SinglePrOutcome {
   files: PrFile[];
   posted?: PostedReview;
+  turns?: number;
+}
+
+export interface ReviewSinglePrOptions {
+  skillContent: string;
+  config: Config;
+  /** Allowlisted org owners for out-of-PR reads (defaults to the config orgs). */
+  allowListedOwners: string[];
+  /** Injectable provider for tests; otherwise resolved from env. */
+  provider?: OpenAiCompatibleProvider;
 }
 
 /**
  * Fully reviews a single PR through the `--pr` path.
  *
- * This is the M2 fixture-injection: the comments posted are a small, fixed set
- * derived from a fixture rather than from an LLM. In Milestone 4 the fixture is
- * replaced by the real LLM-driven comment generation; the posting mechanics,
- * path validation and state recording stay as-is.
+ * The LLM reviews the PR diff (reading files via constrained tools) and queues
+ * draft comments that are collected into a single pending review and posted via
+ * `postDraftReview`. The record's commit SHA is advanced so an unchanged PR is
+ * not re-reviewed.
  */
 export async function reviewSinglePr(
   client: GitHubClient,
   ref: PrRef,
   username: string,
   state: State,
+  opts: ReviewSinglePrOptions,
 ): Promise<ReviewPrOutcome> {
   const info = await fetchPrByRef(client, ref, username);
   if (!info) {
@@ -126,17 +149,68 @@ export async function reviewSinglePr(
   }
 
   const files = await fetchPrFiles(client, { owner: ref.owner, repo: ref.repo, number: ref.number });
-  const allowedPaths = new Set(files.map((f) => f.filename));
-  const comments = buildFixtureComments(files);
+  const changedPaths = new Set(files.map((f) => f.filename));
+  const addedLines = new Map<string, Set<number>>();
+  for (const file of files) {
+    if (file.patch) {
+      addedLines.set(file.filename, addedLineNumbers(file.patch));
+    }
+  }
+
+  const existingComments = await fetchReviewComments(client, {
+    owner: ref.owner,
+    repo: ref.repo,
+    number: ref.number,
+  });
+
+  const systemPrompt = buildSystemPrompt(opts.skillContent);
+  const userPrompt = buildUserPrompt({
+    pr: {
+      owner: info.owner,
+      repo: info.repo,
+      number: info.number,
+      title: info.title,
+      author: username,
+      headSha: info.headRefOid,
+      body: null,
+    },
+    files,
+    existingComments,
+  });
+
+  const queue: QueuedComment[] = [];
+  const provider = opts.provider ?? new OpenAiCompatibleProvider(resolveProviderConfig());
+  const executor = createToolExecutor(
+    client,
+    {
+      pr: {
+        owner: info.owner,
+        repo: info.repo,
+        number: info.number,
+        headSha: info.headRefOid,
+        headOwner: info.headOwner,
+        headRepo: info.headRepo,
+      },
+      isOwnerAllowed: (owner) => opts.allowListedOwners.includes(owner) || owner === defaultOwner(opts.config),
+      changedPaths,
+      addedLines,
+    },
+    queue,
+  );
+
+  const result = await runAgent(provider, executor, systemPrompt, userPrompt, { comments: queue });
+
+  const comments: DraftComment[] = queue.map((c) => ({ path: c.path, line: c.line, body: c.body }));
 
   let posted: PostedReview | undefined;
   if (comments.length > 0) {
+    await deletePendingReviews(client, { owner: ref.owner, repo: ref.repo, number: ref.number });
     posted = await postDraftReview(client, {
       owner: ref.owner,
       repo: ref.repo,
       number: ref.number,
       commitSha: info.headRefOid,
-      allowedPaths,
+      allowedPaths: changedPaths,
       comments,
     });
   }
@@ -146,7 +220,7 @@ export async function reviewSinglePr(
   newRecord.messages = record?.messages ?? [];
   newRecord.messages.push({
     role: "assistant",
-    content: `Posted ${comments.length} draft comment(s) at head ${info.headRefOid}.`,
+    content: result.summary ?? `Reviewed head ${info.headRefOid} (${comments.length} comment(s)).`,
   });
   const nextState = putPr(state, newRecord);
   Object.assign(state, nextState);
@@ -161,29 +235,10 @@ export async function reviewSinglePr(
       : "PR needs review but produced no comments to post.",
     files,
     posted,
+    turns: result.turns,
   };
 }
 
-/**
- * M2 fixture: produces a small fixed set of draft comments (one per changed,
- * non-removed file, targeting the first added line of the first hunk). This is
- * temporary and replaced by real LLM output in Milestone 4.
- */
-export function buildFixtureComments(files: PrFile[]): DraftComment[] {
-  const comments: DraftComment[] = [];
-  for (const file of files) {
-    if (file.status === "removed" || !file.patch) {
-      continue;
-    }
-    const line = firstAddedLine(file.patch);
-    if (line === null) {
-      continue;
-    }
-    comments.push({
-      path: file.filename,
-      line,
-      body: `FIXTURE REVIEW: This draft comment was posted by the review agent during M2 validation. It will be replaced by real model-generated review comments.`,
-    });
-  }
-  return comments;
+function defaultOwner(config: Config): string {
+  return config.repo.split("/")[0];
 }

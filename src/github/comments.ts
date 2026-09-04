@@ -128,3 +128,27 @@ export async function fetchReviews(
     `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews?per_page=100`,
   );
 }
+
+/**
+ * Deletes any PENDING (draft) reviews the current user has on a PR. GitHub only
+ * allows a user to hold one pending review per pull request, so a re-review at a
+ * new head SHA must clear the previous draft before posting a fresh one. Returns
+ * the number of pending reviews deleted.
+ */
+export async function deletePendingReviews(
+  client: GitHubClient,
+  opts: { owner: string; repo: string; number: number },
+): Promise<number> {
+  const reviews = await fetchReviews(client, opts);
+  let deleted = 0;
+  for (const review of reviews) {
+    if (review.state === "PENDING") {
+      await client.rest<{ id: number; state: string }>(
+        "DELETE",
+        `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews/${review.id}`,
+      );
+      deleted += 1;
+    }
+  }
+  return deleted;
+}

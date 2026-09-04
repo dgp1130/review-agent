@@ -22,6 +22,7 @@ interface FakeSearchItem {
   reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   assignees: { nodes: { login?: string }[] };
   repository: { name: string; owner: { login: string } };
+  headRepository: { name: string; owner: { login: string } } | null;
 }
 
 function node(overrides: Partial<FakeSearchItem> & { number: number }): FakeSearchItem {
@@ -33,6 +34,7 @@ function node(overrides: Partial<FakeSearchItem> & { number: number }): FakeSear
     reviewRequests: { nodes: [] },
     assignees: { nodes: [] },
     repository: { name: "review-agent", owner: { login: "dgp1130" } },
+    headRepository: { name: "review-agent", owner: { login: "dgp1130" } },
     ...overrides,
   };
 }
