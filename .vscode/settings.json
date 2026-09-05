@@ -1,3 +1,7 @@
 {
-  "git.enabled": false
+  "git.enabled": false,
+  "cSpell.words": [
+    "Ollama",
+    "OPENCODE"
+  ]
 }
