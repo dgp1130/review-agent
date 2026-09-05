@@ -91,13 +91,54 @@ describe("OpenAiCompatibleProvider.complete", () => {
     expect(messages[1]).toEqual({ role: "tool", tool_call_id: "c1", content: "file contents" });
   });
 
-  it("throws on non-2xx responses", async () => {
-    const fetchImpl = async () => new Response("boom", { status: 500 });
+  it("throws on fatal 4xx responses without retrying", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      return new Response("boom", { status: 404 });
+    };
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
       fetchImpl as typeof fetch,
     );
-    await expect(provider.complete({ messages: [] })).rejects.toThrow(/500/);
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(/404/);
+    expect(calls).toBe(1);
+  });
+
+  it("retries transient 5xx responses and succeeds", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response("overloaded", { status: 503 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "recovered", tool_calls: null } }] }));
+    };
+    const provider = new OpenAiCompatibleProvider(
+      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
+      fetchImpl as typeof fetch,
+    );
+    const turn = await provider.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(turn.content).toBe("recovered");
+    expect(calls).toBe(2);
+  });
+
+  it("retries network failures then succeeds", async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("fetch failed: connect ECONNREFUSED");
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: null } }] }));
+    };
+    const provider = new OpenAiCompatibleProvider(
+      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
+      fetchImpl as typeof fetch,
+    );
+    const turn = await provider.complete({ messages: [] });
+    expect(turn.content).toBe("ok");
+    expect(calls).toBe(2);
   });
 
   it("sends tools and the requested tool_choice", async () => {

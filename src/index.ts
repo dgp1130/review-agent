@@ -1,4 +1,4 @@
-import { parseArgs } from "./cli.js";
+import { parseArgs, readSkillFile } from "./cli.js";
 import { buildConfig, isRepoAllowed } from "./config.js";
 import { assertGhAvailable, currentUser, defaultGhRunner, GhError } from "./github/auth.js";
 import { GitHubClient } from "./github/client.js";
@@ -6,7 +6,7 @@ import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
 import { reviewSinglePr } from "./review/runner.js";
 import { runDaemon } from "./polling/daemon.js";
-import { readFileSync } from "node:fs";
+import { DaemonLock } from "./polling/lock.js";
 
 async function fatal(err: unknown): Promise<number> {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
@@ -61,7 +61,7 @@ async function main(argv: string[]): Promise<number> {
       );
     }
     try {
-      const skillContent = readFileSync(config.skillPath, "utf8");
+      const skillContent = readSkillFile(config.skillPath);
       const outcome = await reviewSinglePr(client, ref, username, state, {
         skillContent,
         config,
@@ -92,7 +92,21 @@ async function main(argv: string[]): Promise<number> {
   process.stdout.write(`skill: ${config.skillPath}\n`);
   process.stdout.write(`orgs: ${config.orgs.length > 0 ? config.orgs.join(", ") : "(none)"}\n`);
 
-  const skillContent = readFileSync(config.skillPath, "utf8");
+  // Startup validation + concurrency guard: the skill must be readable, and the
+  // state directory must exist/write such that the daemon lock can be placed.
+  let skillContent: string;
+  try {
+    skillContent = readSkillFile(config.skillPath);
+  } catch (err) {
+    return fatal(err);
+  }
+  const lock = new DaemonLock(`${config.statePath}.lock`);
+  try {
+    lock.acquire();
+  } catch (err) {
+    return fatal(err);
+  }
+
   const handle = runDaemon({
     client,
     config,
@@ -116,6 +130,7 @@ async function main(argv: string[]): Promise<number> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   await handle.done;
+  lock.release();
   process.stdout.write("daemon stopped. see you next time!\n");
   return 0;
 }

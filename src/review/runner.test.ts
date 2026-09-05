@@ -307,4 +307,108 @@ describe("reviewSinglePr", () => {
     // Round 1 summary + round 2 summary are both preserved.
     expect(record.messages.map((m) => m.content)).toEqual(["Round one summary.", "Round two summary."]);
   });
+
+  it("skips posting when the head SHA advances during the review", async () => {
+    // The by-ref query is served twice per review: once at the start (head
+    // "shax") and once just before posting (head "shay"). The mismatch must
+    // prevent posting stale comments without advancing the record.
+    let byRefCalls = 0;
+    const files: unknown[] = [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
+    ];
+    const client = {
+      graphql: async () => {
+        byRefCalls += 1;
+        return {
+          repository: {
+            pullRequest: rawNode(info({ isReviewRequested: true, headRefOid: byRefCalls === 1 ? "shax" : "shay", number: 9 })),
+          },
+        };
+      },
+      rest: async (method: string, endpoint: string, body?: unknown) => {
+        if (method === "GET" && endpoint.includes("/files?per_page=100")) {
+          return files;
+        }
+        if (method === "GET" && endpoint.includes("/pulls/")) {
+          return [];
+        }
+        if (method === "POST" && endpoint.endsWith("/reviews")) {
+          return { id: 1000, state: "PENDING" };
+        }
+        return [];
+      },
+    };
+    const state = emptyState();
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: {
+        complete: async () => ({
+          content: "",
+          toolCalls: [
+            { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
+          ],
+        }),
+      } as never,
+    });
+
+    expect(outcome.shouldReview).toBe(false);
+    expect(outcome.posted).toBeUndefined();
+    expect(outcome.reason).toContain("head changed during review");
+    // The record must NOT be advanced to "shax" (a real re-review may still happen).
+    expect(state.prs[prKey("dgp1130", "review-agent", 9)]).toBeUndefined();
+  });
+
+  it("does not repost a comment that already exists on the PR", async () => {
+    const files: unknown[] = [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
+    ];
+    // The PR already carries a pending review comment on M1-test.txt:1.
+    const client = {
+      graphql: async () => ({
+        repository: {
+          pullRequest: rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 })),
+        },
+      }),
+      rest: async (method: string, endpoint: string, body?: unknown) => {
+        if (method === "GET" && endpoint.includes("/comments?per_page=100")) {
+          return [{ id: 1, path: "M1-test.txt", line: 1, body: "Missing heading.", created_at: "t" }];
+        }
+        if (method === "GET" && endpoint.includes("/files?per_page=100")) {
+          return files;
+        }
+        if (method === "GET" && endpoint.includes("/pulls/")) {
+          return [];
+        }
+        if (method === "POST" && endpoint.endsWith("/reviews")) {
+          const id = (body as { comments: unknown[] }).comments.length + 1000;
+          return { id, state: "PENDING" };
+        }
+        return [];
+      },
+    };
+    const state = emptyState();
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: {
+        complete: async () => ({
+          content: "",
+          toolCalls: [
+            { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
+          ],
+        }),
+      } as never,
+    });
+
+    // The comment was deduped, so nothing new was posted, but the review is
+    // still recorded at head so it is not redone every tick.
+    expect(outcome.posted).toBeUndefined();
+    expect(outcome.shouldReview).toBe(true);
+    const record = state.prs[prKey("dgp1130", "review-agent", 9)];
+    expect(record.lastReviewedCommitSha).toBe("shax");
+    expect(record.draftCommentIds).toEqual([]);
+  });
 });

@@ -63,30 +63,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   }): Promise<AssistantTurn> {
     const toolDefs = request.tools ?? [];
     const hasTools = toolDefs.length > 0;
-    const response = await this.fetchImpl(`${this.settings.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.settings.apiKey ? { authorization: `Bearer ${this.settings.apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: this.settings.model,
-        messages: request.messages.map(toOpenAiMessage),
-        ...(hasTools
-          ? {
-              tools: toolDefs.map(toOpenAiTool),
-              tool_choice: request.toolChoice ?? "auto",
-            }
-          : {}),
-      }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(
-        `LLM request failed (${response.status}) against ${this.settings.baseUrl}: ${detail.slice(0, 300)}`,
-      );
-    }
+    const response = await this.request(hasTools ? request.toolChoice ?? "auto" : undefined, toolDefs, request.messages);
 
     const payload = (await response.json()) as OpenAiChatResponse;
     const choice = payload.choices[0];
@@ -102,6 +79,83 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       toolCalls: rawToolCalls.length > 0 ? rawToolCalls : embeddedToolCalls,
     };
   }
+
+  /**
+   * Issues the /chat/completions request, retrying transient failures (network
+   * errors and HTTP 429/5xx) with a small exponential backoff. Fatal errors
+   * (4xx other than 429) are surfaced immediately.
+   */
+  private async request(
+    toolChoice: "auto" | "required" | undefined,
+    toolDefs: ToolDefinition[],
+    messages: ChatMessage[],
+  ): Promise<Response> {
+    const url = `${this.settings.baseUrl}/chat/completions`;
+    const body = JSON.stringify({
+      model: this.settings.model,
+      messages: messages.map(toOpenAiMessage),
+      ...(toolDefs.length > 0
+        ? {
+            tools: toolDefs.map(toOpenAiTool),
+            tool_choice: toolChoice ?? "auto",
+          }
+        : {}),
+    });
+
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < LLM_RETRY_ATTEMPTS; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(this.settings.apiKey ? { authorization: `Bearer ${this.settings.apiKey}` } : {}),
+          },
+          body,
+        });
+      } catch (err) {
+        lastErr = err;
+        if (attempt === LLM_RETRY_ATTEMPTS - 1) {
+          throw err;
+        }
+        await sleep(LLM_RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 50);
+        continue;
+      }
+
+      if (response.ok) {
+        return response;
+      }
+      const detail = await response.text().catch(() => "");
+      if (!isLlmTransient(response.status, detail)) {
+        throw new Error(
+          `LLM request failed (${response.status}) against ${this.settings.baseUrl}: ${detail.slice(0, 300)}`,
+        );
+      }
+      lastErr = new Error(
+        `LLM request failed (${response.status}) against ${this.settings.baseUrl}: ${detail.slice(0, 300)}`,
+      );
+      if (attempt === LLM_RETRY_ATTEMPTS - 1) {
+        throw lastErr;
+      }
+      await sleep(LLM_RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 50);
+    }
+    throw lastErr;
+  }
+}
+
+const LLM_RETRY_ATTEMPTS = 3;
+const LLM_RETRY_BASE_DELAY_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLlmTransient(status: number, detail: string): boolean {
+  if (status === 429 || status >= 500) {
+    return true;
+  }
+  return /timed? ?out|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|failed to connect/i.test(detail);
 }
 
 function toToolCall(tc: OpenAiToolCall): ToolCall {

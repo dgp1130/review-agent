@@ -4,6 +4,7 @@ import {
   postDraftReview,
   DraftComment,
   PostedReview,
+  ReviewCommentView,
   fetchReviewComments,
   deletePendingReviews,
 } from "../github/comments.js";
@@ -206,9 +207,24 @@ export async function reviewSinglePr(
   });
 
   const comments: DraftComment[] = queue.map((c) => ({ path: c.path, line: c.line, body: c.body }));
+  const deduped = dedupeComments(comments, existingComments);
 
   let posted: PostedReview | undefined;
-  if (comments.length > 0) {
+  if (deduped.length > 0) {
+    // Re-check the head SHA immediately before posting: if the PR advanced
+    // while the review was running, post nothing and let the next pass review
+    // the new head (never attach stale comments to a newer commit).
+    const latest = await fetchPrByRef(client, ref, username);
+    if (!latest || latest.headRefOid !== info.headRefOid) {
+      return {
+        ref,
+        info,
+        reviewedAtHead: false,
+        shouldReview: false,
+        reason: "PR head changed during review; skipping to avoid posting stale comments.",
+        files,
+      };
+    }
     await deletePendingReviews(client, { owner: ref.owner, repo: ref.repo, number: ref.number });
     posted = await postDraftReview(client, {
       owner: ref.owner,
@@ -216,7 +232,7 @@ export async function reviewSinglePr(
       number: ref.number,
       commitSha: info.headRefOid,
       allowedPaths: changedPaths,
-      comments,
+      comments: deduped,
     });
   }
 
@@ -225,7 +241,7 @@ export async function reviewSinglePr(
   newRecord.messages = record?.messages ?? [];
   newRecord.messages.push({
     role: "assistant",
-    content: result.summary ?? `Reviewed head ${info.headRefOid} (${comments.length} comment(s)).`,
+    content: result.summary ?? `Reviewed head ${info.headRefOid} (${deduped.length} comment(s)).`,
   });
   const nextState = putPr(state, newRecord);
   Object.assign(state, nextState);
@@ -236,12 +252,41 @@ export async function reviewSinglePr(
     reviewedAtHead: false,
     shouldReview: true,
     reason: posted
-      ? `Posted ${comments.length} draft comment(s) as a pending review at head ${info.headRefOid}.`
-      : "PR needs review but produced no comments to post.",
+      ? `Posted ${deduped.length} draft comment(s) as a pending review at head ${info.headRefOid}.`
+      : "PR needs review but produced no new comments to post.",
     files,
     posted,
     turns: result.turns,
   };
+}
+
+/**
+ * Drops queued comments that duplicate an existing review comment on the PR (by
+ * path, line, and normalized body) or another comment in the same batch, so a
+ * re-review never reposts what has already been said.
+ */
+function dedupeComments(
+  comments: DraftComment[],
+  existing: ReviewCommentView[],
+): DraftComment[] {
+  const existingKeys = new Set(
+    existing.flatMap((c) => (c.line !== null ? [commentKey(c.path, c.line, c.body)] : [])),
+  );
+  const seen = new Set<string>();
+  const result: DraftComment[] = [];
+  for (const comment of comments) {
+    const key = commentKey(comment.path, comment.line, comment.body);
+    if (existingKeys.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(comment);
+  }
+  return result;
+}
+
+function commentKey(path: string, line: number, body: string): string {
+  return `${path}:${line}:${body.trim()}`;
 }
 
 function defaultOwner(config: Config): string {
