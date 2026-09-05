@@ -7,3 +7,7 @@ export function areaOfSquare(side) {
   const result = side * side;
   return result;
 }
+
+export function double(value) {
+  return value * 2;
+}
