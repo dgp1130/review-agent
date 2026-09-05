@@ -229,14 +229,66 @@ describe("pruneClosedPrs", () => {
   it("keeps a record that is simply absent from discovery", async () => {
     const state = emptyState();
     state.prs[prKey("dgp1130", "review-agent", 5)] = makePrRecord("dgp1130", "review-agent", 5, "sha0");
+    let probes = 0;
     const opts = makeOpts({
-      client: new FakeClient([], () => rawNode(info({ number: 5, headRefOid: "sha0", state: "OPEN" }))) as never,
+      client: new FakeClient([], () => {
+        probes += 1;
+        return rawNode(info({ number: 5, headRefOid: "sha0", state: "OPEN" }));
+      }) as never,
       state,
     });
 
     const pruned = await pruneClosedPrs(opts, []);
 
     expect(pruned).toEqual([]);
+    expect(probes).toBe(1);
     expect(state.prs[prKey("dgp1130", "review-agent", 5)]).toBeDefined();
+    expect(state.prs[prKey("dgp1130", "review-agent", 5)]?.lastProbeAt).toBeDefined();
+  });
+
+  it("does not re-probe a record already confirmed open after it left candidates", async () => {
+    const state = emptyState();
+    const rec = makePrRecord("dgp1130", "review-agent", 5, "sha0");
+    rec.lastProbeAt = new Date().toISOString();
+    state.prs[prKey("dgp1130", "review-agent", 5)] = rec;
+    let probes = 0;
+    const opts = makeOpts({
+      client: new FakeClient([], () => {
+        probes += 1;
+        return rawNode(info({ number: 5, headRefOid: "sha0", state: "OPEN" }));
+      }) as never,
+      state,
+    });
+
+    const pruned = await pruneClosedPrs(opts, []);
+
+    expect(pruned).toEqual([]);
+    expect(probes).toBe(0);
+    expect(rec.lastProbeAt).toBeDefined();
+  });
+
+  it("clears the probe stamp while a candidate and re-probes a later close", async () => {
+    const state = emptyState();
+    state.prs[prKey("dgp1130", "review-agent", 5)] = makePrRecord("dgp1130", "review-agent", 5, "sha0");
+    let byRef: RawNode | undefined = rawNode(info({ number: 5, headRefOid: "sha0", state: "OPEN" }));
+    const makeClient = () =>
+      new FakeClient([], (n) => {
+        return n === 5 ? byRef : undefined;
+      }) as never;
+
+    // First drop: the PR is open, so it is stamped to stop re-probing.
+    await pruneClosedPrs(makeOpts({ client: makeClient(), state }), []);
+    expect(state.prs[prKey("dgp1130", "review-agent", 5)]?.lastProbeAt).toBeDefined();
+
+    // Re-involved: the candidate clears the stamp for a fresh probe on the next drop.
+    await pruneClosedPrs(makeOpts({ client: makeClient(), state }), [info({ number: 5, headRefOid: "sha0" })]);
+    expect(state.prs[prKey("dgp1130", "review-agent", 5)]?.lastProbeAt).toBeUndefined();
+
+    // The PR closes after the user loses involvement again: it is now reaped.
+    byRef = rawNode(info({ number: 5, headRefOid: "sha0", state: "CLOSED" }));
+    const pruned = await pruneClosedPrs(makeOpts({ client: makeClient(), state }), []);
+
+    expect(pruned).toEqual([prKey("dgp1130", "review-agent", 5)]);
+    expect(state.prs[prKey("dgp1130", "review-agent", 5)]).toBeUndefined();
   });
 });

@@ -29,11 +29,38 @@ describe("FileStateStore", () => {
     const rec = makePrRecord("dgp1130", "review-agent", 42, "abc123");
     rec.messages = [{ role: "user", content: "hi" }];
     rec.draftCommentIds = ["c1"];
+    rec.lastProbeAt = "2026-09-05T01:18:44.000Z";
     const state = putPr(emptyState(), rec);
     store.save(state);
     const loaded = store.load();
     expect(getPr(loaded, "dgp1130", "review-agent", 42)).toEqual(rec);
     expect(existsSync(path)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects a state file whose lastProbeAt is not a string", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ra-"));
+    const path = join(dir, "state.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        prs: {
+          [prKey("dgp1130", "review-agent", 42)]: {
+            owner: "dgp1130",
+            repo: "review-agent",
+            number: 42,
+            reviewedAt: "2026-09-05T00:00:00.000Z",
+            lastReviewedCommitSha: "abc123",
+            messages: [],
+            draftCommentIds: [],
+            lastProbeAt: 42,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const store = new FileStateStore(path, () => {});
+    expect(store.load()).toEqual(emptyState());
     rmSync(dir, { recursive: true, force: true });
   });
 

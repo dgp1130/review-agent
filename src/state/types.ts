@@ -16,6 +16,14 @@ export interface PrRecord {
   draftCommentIds: string[];
   /** ID of the PENDING (draft) review this agent last posted for this PR. */
   draftReviewId?: string;
+  /**
+   * Set when this PR dropped out of the candidate list (the user is no longer a
+   * requested reviewer/assignee) and a state check confirmed it is still open.
+   * Once set, the daemon stops querying the PR: the record is retained so a
+   * dropped review can still be answered, and restored PRs must be re-probed to
+   * reap the ones that later close (see `pruneClosedPrs`).
+   */
+  lastProbeAt?: string;
 }
 
 export interface State {

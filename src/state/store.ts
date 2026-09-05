@@ -99,6 +99,7 @@ function isPrRecord(value: unknown): value is PrRecord {
     typeof candidate.reviewedAt === "string" &&
     typeof candidate.lastReviewedCommitSha === "string" &&
     Array.isArray(candidate.messages) &&
-    Array.isArray(candidate.draftCommentIds)
+    Array.isArray(candidate.draftCommentIds) &&
+    (candidate.lastProbeAt === undefined || typeof candidate.lastProbeAt === "string")
   );
 }

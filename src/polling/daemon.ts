@@ -78,13 +78,26 @@ export async function runTick(opts: DaemonOptions): Promise<TickSummary> {
 /**
  * Removes state records for PRs that are no longer open. A record may be absent
  * from the candidate list either because the PR closed/merged or because the
- * current user's involvement ended; we only prune the former, verified by
- * fetching each such PR's state.
+ * current user's involvement ended while the PR stayed open; we only prune the
+ * former, verified by fetching each such PR's state.
+ *
+ * To avoid hammering GitHub every tick, each dropped PR is probed at most once:
+ * the first time it leaves the candidate list its state is fetched, pruned if
+ * closed/merged, and otherwise stamped with `lastProbeAt`. Once stamped, the
+ * daemon stops querying the PR (the user was removed from an open PR) but keeps
+ * the pending review state so a dropped review can still be answered. The
+ * stamp is cleared while the PR is an active candidate again, so a PR that
+ * closes while the user is involved is re-probed and reaped on its next drop.
  */
 export async function pruneClosedPrs(opts: DaemonOptions, candidates: PullRequestInfo[]): Promise<string[]> {
   const candidateKeys = new Set<string>();
   for (const c of candidates) {
-    candidateKeys.add(prKey(c.owner, c.repo, c.number));
+    const key = prKey(c.owner, c.repo, c.number);
+    candidateKeys.add(key);
+    const record = opts.state.prs[key];
+    if (record?.lastProbeAt !== undefined) {
+      record.lastProbeAt = undefined;
+    }
   }
 
   const closedKeys = new Set<string>();
@@ -92,10 +105,15 @@ export async function pruneClosedPrs(opts: DaemonOptions, candidates: PullReques
     if (candidateKeys.has(key)) {
       continue;
     }
+    if (record.lastProbeAt !== undefined) {
+      continue;
+    }
     try {
       const info = await fetchPrByRef(opts.client, { owner: record.owner, repo: record.repo, number: record.number }, opts.username);
       if (info && info.state !== "OPEN") {
         closedKeys.add(key);
+      } else {
+        record.lastProbeAt = new Date().toISOString();
       }
     } catch (err) {
       log(opts, `  could not check state of ${key}: ${err instanceof Error ? err.message : String(err)}`);
