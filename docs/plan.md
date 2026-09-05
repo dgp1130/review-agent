@@ -83,7 +83,7 @@ Tests are colocated with `src/` using the Vitest-standard `.test.ts` suffix (e.g
 
 **Steps**
 
-1. `npm init -y`; add `typescript`, `vitest`, `@types/node` as dev deps.
+1. `pnpm init`; add `typescript`, `vitest`, `@types/node` as dev deps.
 2. `tsconfig.json` targeting modern Node ESM (`module: "nodenext"`, `target: "es2022"`,
    `strict`, `rootDir: "src"`, `outDir: "dist"`, `sourceMap`). No `ts-node` — a real `tsc` build.
 3. `package.json` scripts:
@@ -102,11 +102,11 @@ Tests are colocated with `src/` using the Vitest-standard `.test.ts` suffix (e.g
 8. Vitest smoke test: CLI rejects a missing skill path; auth module surfaces a missing `gh`.
 
 **Target behavior**
+- `pnpm run build` succeeds.
 
-- `npm run build` succeeds.
 - `node dist/index.js` (no skill) prints usage and exits non-zero.
-- `npm test` passes.
 
+- `pnpm test` passes.
 ---
 
 ## Milestone 1 — PR discovery and eligibility

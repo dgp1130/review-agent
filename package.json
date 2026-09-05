@@ -2,6 +2,7 @@
   "name": "review-agent",
   "version": "0.0.1",
   "description": "An AI agent for reviewing GitHub PRs based on a skill.",
+  "packageManager": "pnpm@11.8.0",
   "type": "module",
   "bin": {
     "review-agent": "dist/index.js"
@@ -16,7 +17,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "pnpm run lint && pnpm run typecheck && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
