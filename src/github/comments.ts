@@ -129,23 +129,23 @@ export async function fetchReviews(
   );
 }
 
+/** A PENDING (draft) review together with the comments it holds. */
+export interface PendingReviewWithComments {
+  reviewId: number;
+  comments: ReviewCommentsResponse[];
+}
+
 /**
- * Deletes any PENDING (draft) reviews the current user has on a PR. GitHub only
- * allows a user to hold one pending review per pull request, so a re-review at a
- * new head SHA must clear the previous draft before posting a fresh one. Returns
- * the number of pending reviews deleted.
- *
- * GitHub's API does not support deleting a review directly (`DELETE
- * .../reviews/{id}` returns 404), so we delete each review comment
- * (`DELETE .../pulls/comments/{id}`), which causes the associated pending
- * review to be discarded.
+ * Fetches every PENDING (draft) review on a PR along with its comments. Pending
+ * comments are not exposed by `GET /pulls/{n}/comments`, so they must be read
+ * from each review's own comments endpoint.
  */
-export async function deletePendingReviews(
+export async function fetchPendingReviewsWithComments(
   client: GitHubClient,
   opts: { owner: string; repo: string; number: number },
-): Promise<number> {
+): Promise<PendingReviewWithComments[]> {
   const reviews = await fetchReviews(client, opts);
-  let deleted = 0;
+  const pending: PendingReviewWithComments[] = [];
   for (const review of reviews) {
     if (review.state !== "PENDING") {
       continue;
@@ -154,13 +154,26 @@ export async function deletePendingReviews(
       "GET",
       `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews/${review.id}/comments`,
     );
-    for (const comment of comments) {
-      await client.rest<{ id: number }>(
-        "DELETE",
-        `/repos/${opts.owner}/${opts.repo}/pulls/comments/${comment.id}`,
-      );
-    }
-    deleted += 1;
+    pending.push({ reviewId: review.id, comments });
   }
-  return deleted;
+  return pending;
+}
+
+/**
+ * Deletes a PENDING (draft) review this agent previously created, removing its
+ * comments at the same time. GitHub's REST API only permits deleting reviews in
+ * the PENDING state (submitted reviews can never be deleted). This is the only
+ * clean way to clear our own draft before posting a fresh one at a new head:
+ * deleting just the comments can leave an empty pending review behind, which
+ * still blocks creating another review (HTTP 422 "only one pending review").
+ */
+export async function deletePendingReview(
+  client: GitHubClient,
+  opts: { owner: string; repo: string; number: number },
+  reviewId: number,
+): Promise<void> {
+  await client.rest<{ id: number }>(
+    "DELETE",
+    `/repos/${opts.owner}/${opts.repo}/pulls/${opts.number}/reviews/${reviewId}`,
+  );
 }

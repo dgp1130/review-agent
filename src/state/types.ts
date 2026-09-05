@@ -14,6 +14,8 @@ export interface PrRecord {
   messages: ChatMessage[];
   /** IDs of draft comments posted for this PR. */
   draftCommentIds: string[];
+  /** ID of the PENDING (draft) review this agent last posted for this PR. */
+  draftReviewId?: string;
 }
 
 export interface State {

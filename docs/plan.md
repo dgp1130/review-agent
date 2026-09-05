@@ -380,6 +380,6 @@ Acceptance criteria across the whole plan:
 - Only ever operates on `dgp1130/review-agent` and the explicitly allowlisted `--orgs`.
 - Never edits or removes existing comments.
 - No permission prompts; capabilities come only from the constrained tools.
-- Fork PRs ignored; `gh` auth validated at startup.
+- Fork (cross-repository) PRs are reviewed like any other PR discovered in the allowlisted scope; `gh` auth validated at startup.
 - Re-reviews continue the same per-PR conversation.
 - Fully testable (`vitest`) at every milestone boundary.

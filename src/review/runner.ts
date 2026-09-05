@@ -6,7 +6,8 @@ import {
   PostedReview,
   ReviewCommentView,
   fetchReviewComments,
-  deletePendingReviews,
+  fetchPendingReviewsWithComments,
+  deletePendingReview,
 } from "../github/comments.js";
 import { fetchPrFiles, fetchFileContent, addedLineNumbers, firstAddedLine, PrFile } from "../github/diffs.js";
 
@@ -21,6 +22,14 @@ import { createToolExecutor, QueuedComment } from "../llm/tools.js";
 import { runAgent } from "../llm/agent.js";
 import { ChatMessage, ChatProvider } from "../llm/types.js";
 import { Config } from "../config.js";
+
+/**
+ * Cap on the number of past review-round summaries kept per PR. Older rounds
+ * are dropped so conversation size stays bounded across re-reviews (plan M5
+ * step 3); the most recent rounds are always retained, so re-reviews still
+ * build on what was already said.
+ */
+const MAX_RECORDED_MESSAGES = 10;
 
 /**
  * A PR is eligible for review when it is open and involves the current user (as
@@ -210,6 +219,7 @@ export async function reviewSinglePr(
   const deduped = dedupeComments(comments, existingComments);
 
   let posted: PostedReview | undefined;
+  let blockedReason: string | undefined;
   if (deduped.length > 0) {
     // Re-check the head SHA immediately before posting: if the PR advanced
     // while the review was running, post nothing and let the next pass review
@@ -225,35 +235,78 @@ export async function reviewSinglePr(
         files,
       };
     }
-    await deletePendingReviews(client, { owner: ref.owner, repo: ref.repo, number: ref.number });
-    posted = await postDraftReview(client, {
+
+    // Clear any pending draft review this agent itself created in an earlier
+    // round, so a re-review posts a fresh review without duplicating comments.
+    // Comments or reviews a human adds manually (e.g. via the GitHub UI) are
+    // NEVER deleted: if any pending draft contains a comment we did not create,
+    // or is an unattributed empty draft, we refuse to post rather than risk
+    // clobbering that work (GitHub allows only one pending review per user).
+    const ownedIds = new Set(record?.draftCommentIds ?? []);
+    const pendingReviews = await fetchPendingReviewsWithComments(client, {
       owner: ref.owner,
       repo: ref.repo,
       number: ref.number,
-      commitSha: info.headRefOid,
-      allowedPaths: changedPaths,
-      comments: deduped,
     });
+    for (const pending of pendingReviews) {
+      if (pending.comments.length === 0) {
+        blockedReason =
+          "An empty pending draft review exists on the PR. Not posting, to avoid clobbering " +
+          "a draft we do not own (discard it in the GitHub UI first).";
+        break;
+      }
+      const fullyOurs =
+        ownedIds.size > 0 && pending.comments.every((c) => ownedIds.has(String(c.id)));
+      if (fullyOurs) {
+        await deletePendingReview(
+          client,
+          { owner: ref.owner, repo: ref.repo, number: ref.number },
+          pending.reviewId,
+        );
+      } else {
+        blockedReason =
+          "A pending draft review still contains comments not created by this agent " +
+          "(likely added via the GitHub UI). Not posting, to avoid deleting or overwriting them.";
+        break;
+      }
+    }
+
+    if (blockedReason === undefined) {
+      posted = await postDraftReview(client, {
+        owner: ref.owner,
+        repo: ref.repo,
+        number: ref.number,
+        commitSha: info.headRefOid,
+        allowedPaths: changedPaths,
+        comments: deduped,
+      });
+    }
   }
 
   const newRecord = makePrRecord(ref.owner, ref.repo, ref.number, info.headRefOid);
   newRecord.draftCommentIds = (posted?.commentIds ?? []).map(String);
+  if (posted) {
+    newRecord.draftReviewId = String(posted.reviewId);
+  }
   newRecord.messages = record?.messages ?? [];
   newRecord.messages.push({
     role: "assistant",
     content: result.summary ?? `Reviewed head ${info.headRefOid} (${deduped.length} comment(s)).`,
   });
+  if (newRecord.messages.length > MAX_RECORDED_MESSAGES) {
+    newRecord.messages = newRecord.messages.slice(newRecord.messages.length - MAX_RECORDED_MESSAGES);
+  }
   const nextState = putPr(state, newRecord);
   Object.assign(state, nextState);
 
   return {
     ref,
     info,
-    reviewedAtHead: false,
+    reviewedAtHead: blockedReason !== undefined || deduped.length === 0,
     shouldReview: true,
     reason: posted
       ? `Posted ${deduped.length} draft comment(s) as a pending review at head ${info.headRefOid}.`
-      : "PR needs review but produced no new comments to post.",
+      : blockedReason ?? "PR needs review but produced no new comments to post.",
     files,
     posted,
     turns: result.turns,
