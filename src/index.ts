@@ -1,6 +1,6 @@
 import { parseArgs, readSkillFile } from "./cli.js";
 import { buildConfig, isRepoAllowed } from "./config.js";
-import { assertGhAvailable, currentUser, defaultGhRunner, GhError } from "./github/auth.js";
+import { assertGhAvailable, currentUser, defaultGhRunner } from "./github/auth.js";
 import { GitHubClient } from "./github/client.js";
 import { FileStateStore } from "./state/store.js";
 import { parsePrUrl } from "./review/workflow.js";
@@ -8,7 +8,7 @@ import { reviewSinglePr } from "./review/runner.js";
 import { runDaemon } from "./polling/daemon.js";
 import { DaemonLock } from "./polling/lock.js";
 
-async function fatal(err: unknown): Promise<number> {
+function fatal(err: unknown): number {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
   return 1;
 }

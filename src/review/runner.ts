@@ -9,13 +9,12 @@ import {
   fetchPendingReviewsWithComments,
   deletePendingReview,
 } from "../github/comments.js";
-import { fetchPrFiles, fetchFileContent, addedLineNumbers, firstAddedLine, PrFile } from "../github/diffs.js";
+import { fetchPrFiles, addedLineNumbers, PrFile } from "../github/diffs.js";
 
 export { firstAddedLine } from "../github/diffs.js";
 import { getPr, putPr } from "../state/store.js";
 import { makePrRecord, State } from "../state/types.js";
 import { PrRef, needsReview } from "./workflow.js";
-import { readFileSync } from "node:fs";
 import { buildSystemPrompt, buildUserPrompt } from "../llm/prompt.js";
 import { OpenAiCompatibleProvider, resolveProviderConfig } from "../llm/provider.js";
 import { createToolExecutor, QueuedComment } from "../llm/tools.js";

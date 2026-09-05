@@ -197,7 +197,7 @@ describe("reviewSinglePr", () => {
       skillContent: "# Review skill",
       config: makeConfig(),
       allowListedOwners: [],
-      provider: provider as never,
+      provider: provider,
     });
 
     expect(outcome.shouldReview).toBe(true);
@@ -223,7 +223,7 @@ describe("reviewSinglePr", () => {
       skillContent: "# Review skill",
       config: makeConfig(),
       allowListedOwners: [],
-      provider: textProvider("No findings.") as never,
+      provider: textProvider("No findings."),
     });
 
     expect(outcome.shouldReview).toBe(true);
@@ -264,7 +264,7 @@ describe("reviewSinglePr", () => {
         skillContent: "# Review skill",
         config: makeConfig(),
         allowListedOwners: [],
-        provider: textProvider("Round one summary.") as never,
+        provider: textProvider("Round one summary."),
       },
     );
     expect(round1State.prs[prKey("dgp1130", "review-agent", 9)].lastReviewedCommitSha).toBe("shax");
@@ -294,7 +294,7 @@ describe("reviewSinglePr", () => {
         skillContent: "# Review skill",
         config: makeConfig(),
         allowListedOwners: [],
-        provider: capturingProvider as never,
+        provider: capturingProvider,
       },
     );
 
@@ -325,7 +325,7 @@ describe("reviewSinglePr", () => {
       skillContent: "# Review skill",
       config: makeConfig(),
       allowListedOwners: [],
-      provider: textProvider("Newest round.") as never,
+      provider: textProvider("Newest round."),
     });
 
     expect(outcome.shouldReview).toBe(true);
@@ -354,7 +354,7 @@ describe("reviewSinglePr", () => {
           },
         };
       },
-      rest: async (method: string, endpoint: string, body?: unknown) => {
+      rest: async (method: string, endpoint: string, _body?: unknown) => {
         if (method === "GET" && endpoint.includes("/files?per_page=100")) {
           return files;
         }
@@ -379,7 +379,7 @@ describe("reviewSinglePr", () => {
             { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
           ],
         }),
-      } as never,
+      },
     });
 
     expect(outcome.shouldReview).toBe(false);
@@ -435,7 +435,7 @@ describe("reviewSinglePr", () => {
             { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
           ],
         }),
-      } as never,
+      },
     });
 
     // Nothing was deleted or posted.
@@ -503,7 +503,7 @@ describe("reviewSinglePr", () => {
             { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 2, body: "Fresh agent comment." } },
           ],
         }),
-      } as never,
+      },
     });
 
     // The agent's own pending review was deleted wholesale, then a fresh one posted.
@@ -557,7 +557,7 @@ describe("reviewSinglePr", () => {
             { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
           ],
         }),
-      } as never,
+      },
     });
 
     // The comment was deduped, so nothing new was posted, but the review is

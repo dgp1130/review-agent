@@ -1,5 +1,5 @@
 import { GitHubClient } from "../github/client.js";
-import { addedLineNumbers, fetchFileContent } from "../github/diffs.js";
+import { fetchFileContent } from "../github/diffs.js";
 import { ToolDefinition } from "./types.js";
 
 export type ToolResult = { ok: true; value: string } | { ok: false; error: string };

@@ -57,7 +57,7 @@ export async function currentUser(runGh: GhRunner = defaultGhRunner): Promise<st
   }
   let parsed: { data?: { viewer?: { login?: string } } };
   try {
-    parsed = JSON.parse(stdout);
+    parsed = JSON.parse(stdout) as { data?: { viewer?: { login?: string } } };
   } catch {
     throw new GhError("The `gh` CLI returned invalid JSON while resolving the user.");
   }

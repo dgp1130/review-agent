@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runTick, pruneClosedPrs, TickSummary } from "./daemon.js";
+import { runTick, pruneClosedPrs } from "./daemon.js";
 import { PullRequestInfo } from "../github/prs.js";
 import { emptyState, makePrRecord, prKey, State } from "../state/types.js";
 import { StateStore } from "../state/store.js";
@@ -68,7 +68,7 @@ class FakeClient {
     return { repository: { pullRequest: node ?? null } } as T;
   }
 
-  async rest<T>(method: string, endpoint: string, body?: unknown): Promise<T> {
+  async rest<T>(method: string, endpoint: string, _body?: unknown): Promise<T> {
     if (method === "GET" && endpoint.includes("/files?per_page=100")) {
       return FILES as T;
     }
@@ -146,7 +146,7 @@ describe("runTick", () => {
       client: new FakeClient([rawNode(info({ number: 9, headRefOid: "sha0" }))], () => undefined) as never,
       state,
       stateStore: store,
-      provider: textProvider(["Found it."]) as never,
+      provider: textProvider(["Found it."]),
     });
 
     const summary = await runTick(opts);
@@ -163,7 +163,7 @@ describe("runTick", () => {
     const opts = makeOpts({
       client: new FakeClient([rawNode(info({ number: 9, headRefOid: "sha0" }))], () => undefined) as never,
       state,
-      provider: textProvider(["Should not run."]) as never,
+      provider: textProvider(["Should not run."]),
     });
 
     const summary = await runTick(opts);
@@ -179,7 +179,7 @@ describe("runTick", () => {
         [rawNode(info({ number: 9, headRefOid: "sha0" })), rawNode(info({ number: 10, headRefOid: "sha1" }))],
         () => undefined,
       ) as never,
-      provider: throwingProvider() as never,
+      provider: throwingProvider(),
     });
 
     const summary = await runTick(opts);

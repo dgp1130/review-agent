@@ -12,11 +12,11 @@ export class DaemonLock {
   acquire(): void {
     mkdirSync(dirname(this.lockPath), { recursive: true });
     if (existsSync(this.lockPath)) {
-      let pid = NaN;
+let pid = NaN;
       try {
         pid = Number(readFileSync(this.lockPath, "utf8").trim());
       } catch {
-        pid = NaN;
+        // Unreadable lock file: treat the lock as invalid (NaN) below.
       }
       if (Number.isFinite(pid) && processIsAlive(pid)) {
         throw new Error(
@@ -31,6 +31,7 @@ export class DaemonLock {
     } catch (err) {
       throw new Error(
         `Could not acquire the daemon lock ${this.lockPath}: another instance may just have started. ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
   }

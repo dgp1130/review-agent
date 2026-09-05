@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runAgent, DEFAULT_MAX_TURNS } from "./agent.js";
-import { ChatMessage, ChatProvider, AssistantTurn, ToolCall } from "./types.js";
+import { ChatProvider, AssistantTurn, ToolCall } from "./types.js";
 import { QueuedComment, serializeToolResult } from "./tools.js";
 
 class ScriptedProvider implements ChatProvider {
@@ -55,7 +55,7 @@ describe("runAgent", () => {
 
     const roles = result.transcript.map((m) => m.role);
     expect(roles).toEqual(["user", "assistant", "tool", "assistant"]);
-    const toolMsg = result.transcript[2] as ChatMessage;
+    const toolMsg = result.transcript[2];
     expect(toolMsg.toolCallId).toBe("t1");
     expect(toolMsg.role).toBe("tool");
   });
@@ -89,7 +89,7 @@ describe("runAgent", () => {
 
     const execute = async (_name: string, _args: Record<string, unknown>) => ({ ok: false, error: "not a file changed" }) as const;
     const result = await runAgent(provider, execute, "sys", "user");
-    const toolMessage = result.transcript[2] as ChatMessage;
+    const toolMessage = result.transcript[2];
     expect(toolMessage.content).toBe(serializeToolResult({ ok: false, error: "not a file changed" }));
   });
 

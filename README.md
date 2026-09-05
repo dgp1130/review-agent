@@ -8,6 +8,8 @@ An AI agent for reviewing GitHub PRs based on a skill.
 npm install
 npm run build   # tsc -> dist/
 npm test        # vitest
+npm run lint    # eslint (all findings are errors)
+npm run check   # required gate: lint + typecheck + tests
 npm start -- <skill.md> [--pr <url>] [--orgs org1,org2,...]
 ```
 

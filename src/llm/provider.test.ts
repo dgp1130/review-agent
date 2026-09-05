@@ -28,7 +28,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
   it("posts OpenAI-shaped request and parses assistant text", async () => {
     const calls: { url: string; body: Record<string, unknown> }[] = [];
     const fetchImpl = async (url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
       calls.push({ url, body });
       return new Response(JSON.stringify({ choices: [{ message: { content: "hello", tool_calls: null } }] }));
     };
@@ -62,7 +62,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
       );
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
+      fetchImpl,
     );
     const turn = await provider.complete({ messages: [], tools: [] });
     expect(turn.toolCalls).toEqual([{ id: "c1", name: "create_comment", arguments: { a: 1 } }]);
@@ -71,7 +71,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
   it("encodes assistant tool_calls and tool messages when sending history", async () => {
     let sent: Record<string, unknown> | undefined;
     const fetchImpl = async (_url: string, init: RequestInit) => {
-      sent = JSON.parse(String(init.body)) as Record<string, unknown>;
+      sent = JSON.parse(init.body as string) as Record<string, unknown>;
       return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: null } }] }));
     };
     const provider = new OpenAiCompatibleProvider(
@@ -99,7 +99,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
     };
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
+      fetchImpl,
     );
     await expect(provider.complete({ messages: [] })).rejects.toThrow(/404/);
     expect(calls).toBe(1);
@@ -116,7 +116,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
     };
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
+      fetchImpl,
     );
     const turn = await provider.complete({ messages: [{ role: "user", content: "hi" }] });
     expect(turn.content).toBe("recovered");
@@ -134,7 +134,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
     };
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
+      fetchImpl,
     );
     const turn = await provider.complete({ messages: [] });
     expect(turn.content).toBe("ok");
@@ -144,7 +144,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
   it("sends tools and the requested tool_choice", async () => {
     let sent: Record<string, unknown> | undefined;
     const fetchImpl = async (_url: string, init: RequestInit) => {
-      sent = JSON.parse(String(init.body)) as Record<string, unknown>;
+      sent = JSON.parse(init.body as string) as Record<string, unknown>;
       return new Response(
         JSON.stringify({ choices: [{ message: { content: "x", tool_calls: null } }] }),
       );
@@ -180,7 +180,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
       );
     const provider = new OpenAiCompatibleProvider(
       { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
+      fetchImpl,
     );
     const turn = await provider.complete({
       messages: [{ role: "user", content: "hi" }],
