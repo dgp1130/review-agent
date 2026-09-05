@@ -1,2 +1,4 @@
 node_modules/
 dist/
+.workspaces/
+!.workspaces/README.md
