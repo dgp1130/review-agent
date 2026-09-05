@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { extractEmbeddedToolCalls, OpenAiCompatibleProvider, resolveProviderConfig } from "./provider.js";
+import { OpenAiCompatibleProvider, resolveProviderConfig } from "./provider.js";
 import { ChatMessage } from "./types.js";
 
+const OPENCODE_BASE_URL = "https://opencode.ai/zen/v1";
+
+function provider(fetchImpl: typeof fetch): OpenAiCompatibleProvider {
+  return new OpenAiCompatibleProvider({ baseUrl: "http://x/v1", model: "m" }, fetchImpl);
+}
+
+function textResponse(content: string): Response {
+  return new Response(JSON.stringify({ choices: [{ message: { content, tool_calls: null } }] }));
+}
+
 describe("resolveProviderConfig", () => {
-  it("defaults to the local OpenAI-compatible endpoint", () => {
+  it("defaults to the OpenCode Zen endpoint with no API key", () => {
     const cfg = resolveProviderConfig({});
-    expect(cfg.provider).toBe("auto");
-    expect(cfg.baseUrl).toBe("http://127.0.0.1:11434/v1");
-    expect(cfg.model).toBe("qwen2.5-coder:7b");
+    expect(cfg.baseUrl).toBe(OPENCODE_BASE_URL);
+    expect(cfg.model).toBe("big-pickle");
+    expect(cfg.apiKey).toBeUndefined();
   });
 
   it("honors env overrides and strips trailing slashes", () => {
@@ -19,8 +29,26 @@ describe("resolveProviderConfig", () => {
     });
     expect(cfg.baseUrl).toBe("http://example.com/v1");
     expect(cfg.model).toBe("gpt-x");
-    expect(cfg.provider).toBe("antigravity");
     expect(cfg.apiKey).toBe("secret");
+  });
+
+  it("resolves gemini to its OpenAI-compatible endpoint with a key", () => {
+    const cfg = resolveProviderConfig({
+      REVIEW_AGENT_PROVIDER: "gemini",
+      REVIEW_AGENT_GEMINI_API_KEY: "gkey",
+    });
+    expect(cfg.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+    expect(cfg.model).toBe("gemini-3.5-flash");
+    expect(cfg.apiKey).toBe("gkey");
+  });
+
+  it("falls back to the standard GEMINI_API_KEY env var", () => {
+    const cfg = resolveProviderConfig({ REVIEW_AGENT_PROVIDER: "gemini", GEMINI_API_KEY: "gkey" });
+    expect(cfg.apiKey).toBe("gkey");
+  });
+
+  it("requires an API key for gemini", () => {
+    expect(() => resolveProviderConfig({ REVIEW_AGENT_PROVIDER: "gemini" })).toThrow(/REVIEW_AGENT_GEMINI_API_KEY/);
   });
 });
 
@@ -30,13 +58,9 @@ describe("OpenAiCompatibleProvider.complete", () => {
     const fetchImpl = async (url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       calls.push({ url, body });
-      return new Response(JSON.stringify({ choices: [{ message: { content: "hello", tool_calls: null } }] }));
+      return textResponse("hello");
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
-    );
-    const turn = await provider.complete({ messages: [{ role: "user", content: "hi" }] });
+    const turn = await provider(fetchImpl as typeof fetch).complete({ messages: [{ role: "user", content: "hi" }] });
 
     expect(turn.content).toBe("hello");
     expect(turn.toolCalls).toEqual([]);
@@ -44,7 +68,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
     expect(calls[0].body).toMatchObject({ model: "m", messages: [{ role: "user", content: "hi" }] });
   });
 
-  it("parses tool_calls and strings the arguments", async () => {
+  it("parses tool_calls and parses the arguments", async () => {
     const fetchImpl = async () =>
       new Response(
         JSON.stringify({
@@ -60,11 +84,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
           ],
         }),
       );
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl,
-    );
-    const turn = await provider.complete({ messages: [], tools: [] });
+    const turn = await provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] });
     expect(turn.toolCalls).toEqual([{ id: "c1", name: "create_comment", arguments: { a: 1 } }]);
   });
 
@@ -72,20 +92,17 @@ describe("OpenAiCompatibleProvider.complete", () => {
     let sent: Record<string, unknown> | undefined;
     const fetchImpl = async (_url: string, init: RequestInit) => {
       sent = JSON.parse(init.body as string) as Record<string, unknown>;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: null } }] }));
+      return textResponse("ok");
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
-    );
     const history: ChatMessage[] = [
       { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: { path: "a.ts" } }] },
       { role: "tool", toolCallId: "c1", content: "file contents" },
     ];
-    await provider.complete({ messages: history });
+    await provider(fetchImpl as typeof fetch).complete({ messages: history });
     const messages = sent?.messages as Record<string, unknown>[];
     expect(messages[0]).toMatchObject({
       role: "assistant",
+      content: null,
       tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } }],
     });
     expect(messages[1]).toEqual({ role: "tool", tool_call_id: "c1", content: "file contents" });
@@ -97,11 +114,7 @@ describe("OpenAiCompatibleProvider.complete", () => {
       calls += 1;
       return new Response("boom", { status: 404 });
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl,
-    );
-    await expect(provider.complete({ messages: [] })).rejects.toThrow(/404/);
+    await expect(provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(/404/);
     expect(calls).toBe(1);
   });
 
@@ -112,13 +125,9 @@ describe("OpenAiCompatibleProvider.complete", () => {
       if (calls === 1) {
         return new Response("overloaded", { status: 503 });
       }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "recovered", tool_calls: null } }] }));
+      return textResponse("recovered");
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl,
-    );
-    const turn = await provider.complete({ messages: [{ role: "user", content: "hi" }] });
+    const turn = await provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] });
     expect(turn.content).toBe("recovered");
     expect(calls).toBe(2);
   });
@@ -128,15 +137,13 @@ describe("OpenAiCompatibleProvider.complete", () => {
     const fetchImpl = async () => {
       calls += 1;
       if (calls === 1) {
-        throw new Error("fetch failed: connect ECONNREFUSED");
+        const err = new TypeError("fetch failed");
+        err.cause = new Error("connect ECONNREFUSED 127.0.0.1:11434");
+        throw err;
       }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: null } }] }));
+      return textResponse("ok");
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl,
-    );
-    const turn = await provider.complete({ messages: [] });
+    const turn = await provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] });
     expect(turn.content).toBe("ok");
     expect(calls).toBe(2);
   });
@@ -146,14 +153,19 @@ describe("OpenAiCompatibleProvider.complete", () => {
     const fetchImpl = async (_url: string, init: RequestInit) => {
       sent = JSON.parse(init.body as string) as Record<string, unknown>;
       return new Response(
-        JSON.stringify({ choices: [{ message: { content: "x", tool_calls: null } }] }),
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [{ id: "c1", type: "function", function: { name: "create_comment", arguments: "{}" } }],
+              },
+            },
+          ],
+        }),
       );
     };
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl as typeof fetch,
-    );
-    await provider.complete({
+    await provider(fetchImpl as typeof fetch).complete({
       messages: [{ role: "user", content: "hi" }],
       tools: [{ name: "create_comment", description: "d", parameters: { type: "object", properties: {} } }],
       toolChoice: "required",
@@ -162,74 +174,5 @@ describe("OpenAiCompatibleProvider.complete", () => {
       { type: "function", function: { name: "create_comment", description: "d", parameters: { type: "object", properties: {} } } },
     ]);
     expect(sent?.tool_choice).toBe("required");
-  });
-
-  it("turns JSON-in-content tool calls into toolCalls", async () => {
-    const fetchImpl = async () =>
-      new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: '{"name": "create_comment", "arguments": {"path": "a.js", "line": 4, "body": "nit"}}',
-                tool_calls: null,
-              },
-            },
-          ],
-        }),
-      );
-    const provider = new OpenAiCompatibleProvider(
-      { provider: "auto", baseUrl: "http://x/v1", model: "m" },
-      fetchImpl,
-    );
-    const turn = await provider.complete({
-      messages: [{ role: "user", content: "hi" }],
-      tools: [{ name: "create_comment", description: "d", parameters: { type: "object", properties: {} } }],
-    });
-    expect(turn.content).toBe("");
-    expect(turn.toolCalls).toHaveLength(1);
-    expect(turn.toolCalls[0]).toMatchObject({
-      name: "create_comment",
-      arguments: { path: "a.js", line: 4, body: "nit" },
-    });
-  });
-});
-
-describe("extractEmbeddedToolCalls", () => {
-  const toolNames = ["create_comment", "read_file"];
-
-  it("parses a single object tool call", () => {
-    const calls = extractEmbeddedToolCalls('{"name":"read_file","arguments":{"path":"a.ts"}}', toolNames);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ name: "read_file", arguments: { path: "a.ts" } });
-  });
-
-  it("parses an array of tool calls and stringified arguments", () => {
-    const calls = extractEmbeddedToolCalls(
-      '[{"name":"read_file","arguments":"{\\"path\\":\\"a.ts\\"}"},{"name":"create_comment","arguments":{"line":1}}]',
-      toolNames,
-    );
-    expect(calls).toHaveLength(2);
-    expect(calls[0].arguments).toEqual({ path: "a.ts" });
-    expect(calls[1].arguments).toEqual({ line: 1 });
-  });
-
-  it("handles ```json fences", () => {
-    const calls = extractEmbeddedToolCalls(
-      '```json\n{"name":"create_comment","arguments":{"line":2}}\n```',
-      toolNames,
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0].arguments).toEqual({ line: 2 });
-  });
-
-  it("ignores plain text and unknown tool names", () => {
-    expect(extractEmbeddedToolCalls("just a summary", toolNames)).toEqual([]);
-    expect(extractEmbeddedToolCalls('{"name":"rm -rf","arguments":{}}', toolNames)).toEqual([]);
-  });
-
-  it("ignores malformed JSON and missing arguments", () => {
-    expect(extractEmbeddedToolCalls('{"name": "read_file"', toolNames)).toEqual([]);
-    expect(extractEmbeddedToolCalls('{"name":"read_file","arguments":42}', toolNames)).toEqual([]);
   });
 });

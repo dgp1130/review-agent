@@ -1,9 +1,10 @@
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { APICallError, generateText, jsonSchema, tool } from "ai";
+import type { LanguageModel, ModelMessage, Tool as AiTool, ToolSet, TypedToolCall } from "ai";
 import { AssistantTurn, ChatMessage, ChatProvider, ToolCall, ToolDefinition } from "./types.js";
 
 export interface ProviderSettings {
-  /** Informational: which backend flavor this resolves to. */
-  provider: string;
-  /** OpenAI-compatible base URL, e.g. http://127.0.0.1:11434/v1 */
+  /** OpenAI-compatible base URL, e.g. https://opencode.ai/zen/v1 */
   baseUrl: string;
   model: string;
   apiKey?: string;
@@ -13,48 +14,63 @@ const ENV_BASE_URL_VAR = "REVIEW_AGENT_BASE_URL";
 const ENV_MODEL_VAR = "REVIEW_AGENT_MODEL";
 const ENV_PROVIDER_VAR = "REVIEW_AGENT_PROVIDER";
 const ENV_API_KEY_VAR = "REVIEW_AGENT_API_KEY";
+const ENV_GEMINI_API_KEY_VAR = "REVIEW_AGENT_GEMINI_API_KEY";
 
-// Defaults verified to work in the local dev environment (Ollama on 11434 with
-// qwen2.5-coder:7b). Point REVIEW_AGENT_BASE_URL / REVIEW_AGENT_MODEL at any
-// OpenAI-compatible endpoint (an opencode server or Antigravity sidecar) to use
-// those instead. Both real tool_calls and JSON-in-content tool calls are handled.
-const DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_MODEL = "qwen2.5-coder:7b";
+// OpenCode Zen hosts an OpenAI-compatible gateway at /zen/v1 with no API key
+// required for its (rate-limited) anonymous free tier. This is the default.
+const OPENCODE_BASE_URL = "https://opencode.ai/zen/v1";
+const OPENCODE_MODEL = "big-pickle";
+
+// Gemini's official OpenAI-compatibility endpoint (AI Studio). Needs an API
+// key via REVIEW_AGENT_GEMINI_API_KEY or GEMINI_API_KEY.
+const GEMINI_PROVIDER = "gemini";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+const GEMINI_MODEL = "gemini-3.5-flash";
+const GEMINI_KEY_VAR_FALLBACK = "GEMINI_API_KEY";
 
 export function resolveProviderConfig(env: Record<string, string | undefined> = process.env): ProviderSettings {
   const provider = (env[ENV_PROVIDER_VAR] ?? "auto").trim().toLowerCase();
-  const baseUrl = (env[ENV_BASE_URL_VAR] ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
-  const model = (env[ENV_MODEL_VAR] ?? DEFAULT_MODEL).trim();
+
+  if (provider === GEMINI_PROVIDER) {
+    const baseUrl = (env[ENV_BASE_URL_VAR] ?? GEMINI_BASE_URL).trim().replace(/\/+$/, "");
+    const model = (env[ENV_MODEL_VAR] ?? GEMINI_MODEL).trim();
+    const apiKey = (env[ENV_GEMINI_API_KEY_VAR] ?? env[GEMINI_KEY_VAR_FALLBACK])?.trim();
+    if (!apiKey) {
+      throw new Error(
+        `${ENV_GEMINI_API_KEY_VAR} (or ${GEMINI_KEY_VAR_FALLBACK}) is required when ${ENV_PROVIDER_VAR}=${GEMINI_PROVIDER}.`,
+      );
+    }
+    return { baseUrl, model, apiKey };
+  }
+
+  const baseUrl = (env[ENV_BASE_URL_VAR] ?? OPENCODE_BASE_URL).trim().replace(/\/+$/, "");
+  const model = (env[ENV_MODEL_VAR] ?? OPENCODE_MODEL).trim();
   const apiKey = env[ENV_API_KEY_VAR]?.trim();
-  return { provider, baseUrl, model, ...(apiKey && apiKey.length > 0 ? { apiKey } : {}) };
-}
-
-interface OpenAiToolCall {
-  id: string;
-  type: string;
-  function: { name: string; arguments: string };
-}
-
-interface OpenAiChoice {
-  message: { content: string | null; tool_calls?: OpenAiToolCall[] | null };
-  finish_reason: string;
-}
-
-interface OpenAiChatResponse {
-  choices: OpenAiChoice[];
+  return { baseUrl, model, ...(apiKey && apiKey.length > 0 ? { apiKey } : {}) };
 }
 
 /**
- * A ChatProvider backed by any OpenAI-compatible /chat/completions endpoint.
- * Works with the local Ollama service, an opencode server, or an Antigravity
- * sidecar (all expose this protocol). No API-key management is performed;
- * credentials come from configuration only.
+ * A ChatProvider backed by any OpenAI-compatible /chat/completions endpoint,
+ * implemented over the Vercel AI SDK's `@ai-sdk/openai-compatible` provider.
+ * Works with OpenCode Zen, Gemini's OpenAI-compatibility endpoint, or any other
+ * OpenAI-compatible service (an opencode server, Ollama, ...). API keys are
+ * optional (Zen has a keyless free tier) and come from configuration only.
  */
 export class OpenAiCompatibleProvider implements ChatProvider {
+  private readonly model: LanguageModel;
+
   constructor(
     private readonly settings: ProviderSettings,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
-  ) {}
+  ) {
+    const provider = createOpenAICompatible({
+      name: "openai-compatible",
+      baseURL: settings.baseUrl,
+      ...(settings.apiKey ? { apiKey: settings.apiKey } : {}),
+      fetch: fetchImpl,
+    });
+    this.model = provider.chatModel(settings.model);
+  }
 
   async complete(request: {
     messages: ChatMessage[];
@@ -63,82 +79,45 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   }): Promise<AssistantTurn> {
     const toolDefs = request.tools ?? [];
     const hasTools = toolDefs.length > 0;
-    const response = await this.request(hasTools ? request.toolChoice ?? "auto" : undefined, toolDefs, request.messages);
-
-    const payload = (await response.json()) as OpenAiChatResponse;
-    const choice = payload.choices[0];
-    if (!choice) {
-      throw new Error("LLM response contained no choices.");
-    }
-    const toolNames = toolDefs.map((t) => t.name);
-    const rawToolCalls = (choice.message.tool_calls ?? []).map(toToolCall);
-    const embeddedToolCalls =
-      rawToolCalls.length === 0 ? extractEmbeddedToolCalls(choice.message.content, toolNames) : [];
-    return {
-      content: embeddedToolCalls.length === 0 ? choice.message.content : "",
-      toolCalls: rawToolCalls.length > 0 ? rawToolCalls : embeddedToolCalls,
-    };
-  }
-
-  /**
-   * Issues the /chat/completions request, retrying transient failures (network
-   * errors and HTTP 429/5xx) with a small exponential backoff. Fatal errors
-   * (4xx other than 429) are surfaced immediately.
-   */
-  private async request(
-    toolChoice: "auto" | "required" | undefined,
-    toolDefs: ToolDefinition[],
-    messages: ChatMessage[],
-  ): Promise<Response> {
-    const url = `${this.settings.baseUrl}/chat/completions`;
-    const body = JSON.stringify({
-      model: this.settings.model,
-      messages: messages.map(toOpenAiMessage),
-      ...(toolDefs.length > 0
+    const result = await this.generate({
+      messages: request.messages.map((m) => toModelMessage(m)),
+      ...(hasTools
         ? {
-            tools: toolDefs.map(toOpenAiTool),
-            tool_choice: toolChoice ?? "auto",
+            tools: Object.fromEntries(toolDefs.map((def) => [def.name, toAiTool(def)])),
+            toolChoice: request.toolChoice ?? "auto",
           }
         : {}),
     });
+    return { content: result.text, toolCalls: result.toolCalls.map(toToolCall) };
+  }
 
+  /**
+   * Issues the /chat/completions request via the AI SDK, retrying transient
+   * failures (network errors and HTTP 429/5xx) with a small exponential
+   * backoff. Fatal errors (4xx other than 429) are surfaced immediately. The
+   * AI SDK's own retries are disabled so backoff is not multiplied.
+   */
+  private async generate(args: {
+    messages: ModelMessage[];
+    tools?: Record<string, AiTool>;
+    toolChoice?: "auto" | "required";
+  }): Promise<{ text: string; toolCalls: TypedToolCall<ToolSet>[] }> {
     let lastErr: unknown;
     for (let attempt = 0; attempt < LLM_RETRY_ATTEMPTS; attempt += 1) {
-      let response: Response;
       try {
-        response = await this.fetchImpl(url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(this.settings.apiKey ? { authorization: `Bearer ${this.settings.apiKey}` } : {}),
-          },
-          body,
+        const result = await generateText({
+          ...args,
+          model: this.model,
+          maxRetries: 0,
         });
+        return { text: result.text, toolCalls: result.toolCalls ?? [] };
       } catch (err) {
         lastErr = err;
-        if (attempt === LLM_RETRY_ATTEMPTS - 1) {
-          throw err;
+        if (attempt === LLM_RETRY_ATTEMPTS - 1 || !isTransientLlmError(err)) {
+          throw new Error(llmErrorMessage(err, this.settings.baseUrl), { cause: err });
         }
         await sleep(LLM_RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 50);
-        continue;
       }
-
-      if (response.ok) {
-        return response;
-      }
-      const detail = await response.text().catch(() => "");
-      if (!isLlmTransient(response.status, detail)) {
-        throw new Error(
-          `LLM request failed (${response.status}) against ${this.settings.baseUrl}: ${detail.slice(0, 300)}`,
-        );
-      }
-      lastErr = new Error(
-        `LLM request failed (${response.status}) against ${this.settings.baseUrl}: ${detail.slice(0, 300)}`,
-      );
-      if (attempt === LLM_RETRY_ATTEMPTS - 1) {
-        throw lastErr;
-      }
-      await sleep(LLM_RETRY_BASE_DELAY_MS * 2 ** attempt + Math.random() * 50);
     }
     throw lastErr;
   }
@@ -151,97 +130,71 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isLlmTransient(status: number, detail: string): boolean {
-  if (status === 429 || status >= 500) {
-    return true;
+function isTransientLlmError(err: unknown): boolean {
+  if (err instanceof APICallError) {
+    return err.isRetryable === true || err.statusCode === 429 || (err.statusCode ?? 0) >= 500;
   }
-  return /timed? ?out|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|failed to connect/i.test(detail);
+  return false;
 }
 
-function toToolCall(tc: OpenAiToolCall): ToolCall {
+function llmErrorMessage(err: unknown, baseUrl: string): string {
+  if (err instanceof APICallError) {
+    const status = err.statusCode === undefined ? "" : ` (${err.statusCode})`;
+    return `LLM request failed${status} against ${baseUrl}: ${err.message || err.responseBody || "unknown error"}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+function toToolCall(tc: TypedToolCall<ToolSet>): ToolCall {
   return {
-    id: tc.id,
-    name: tc.function.name,
-    arguments: JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>,
+    id: tc.toolCallId,
+    name: tc.toolName,
+    arguments: (tc.input ?? {}) as Record<string, unknown>,
   };
 }
 
 /**
- * Some OpenAI-compatible backends (e.g. Ollama's text-mode function calling for
- * models without native tool support, such as qwen2.5-coder) emit tool calls as
- * a JSON object in the `content` field instead of a `tool_calls` array. Accept
- * that style too: a single object or an array of objects of the shape
- * `{"name": "...", "arguments": {...|"..."}}`, optionally fenced in ```json.
- * Returns [] when the content is not a recognized tool call.
+ * Maps a constrained tool definition to an AI SDK tool. The schema is
+ * advertised as-is; the decorator keeps the schema JSON-compatible at the
+ * domain boundary (integer fields also accept string forms like `"4"` for a
+ * line number), matching the executor's tolerant requireInteger coercion.
  */
-export function extractEmbeddedToolCalls(content: string | null, toolNames: string[]): ToolCall[] {
-  if (!content) {
-    return [];
-  }
-  let text = content.trim();
-  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/);
-  if (fenced) {
-    text = fenced[1].trim();
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  const candidates = Array.isArray(value) ? value : [value];
-  const calls: ToolCall[] = [];
-  for (const candidate of candidates) {
-    if (typeof candidate !== "object" || candidate === null) {
-      continue;
-    }
-    const obj = candidate as Record<string, unknown>;
-    const name = obj.name;
-    if (typeof name !== "string" || !toolNames.includes(name)) {
-      continue;
-    }
-    let args: Record<string, unknown>;
-    if (typeof obj.arguments === "string") {
-      try {
-        args = JSON.parse(obj.arguments) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-    } else if (typeof obj.arguments === "object" && obj.arguments !== null) {
-      args = obj.arguments as Record<string, unknown>;
-    } else {
-      continue;
-    }
-    calls.push({ id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args });
-  }
-  return calls;
+function toAiTool(def: ToolDefinition): AiTool {
+  return tool({
+    description: def.description,
+    inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
+  });
 }
 
-function toOpenAiTool(tool: ToolDefinition): Record<string, unknown> {
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  };
-}
-
-function toOpenAiMessage(m: ChatMessage): Record<string, unknown> {
-  if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-    return {
-      role: "assistant",
-      content: m.content,
-      tool_calls: m.toolCalls.map((tc) => ({
-        id: tc.id,
-        type: "function",
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-      })),
-    };
+/** Maps our chat message into the AI SDK's message model. */
+function toModelMessage(m: ChatMessage): ModelMessage {
+  if (m.role === "assistant") {
+    const content =
+      m.toolCalls && m.toolCalls.length > 0
+        ? [
+            ...(m.content ? [{ type: "text" as const, text: m.content }] : []),
+            ...m.toolCalls.map((tc) => ({
+              type: "tool-call" as const,
+              toolCallId: tc.id,
+              toolName: tc.name,
+              input: tc.arguments,
+            })),
+          ]
+        : m.content;
+    return { role: "assistant", content };
   }
   if (m.role === "tool") {
-    return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+    return {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: m.toolCallId ?? "",
+          toolName: "",
+          output: { type: "text", value: m.content },
+        },
+      ],
+    };
   }
   return { role: m.role, content: m.content };
 }

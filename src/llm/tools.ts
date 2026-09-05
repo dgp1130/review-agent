@@ -67,7 +67,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       type: "object",
       properties: {
         path: { type: "string", description: "Path of a file changed in the PR" },
-        line: { type: "integer", description: "New-file line number of an added line in the diff" },
+        // LLMs occasionally emit string forms of numbers (e.g. "4"); the
+        // executor's requireInteger coerces those at call time.
+        line: { type: ["integer", "string"], description: "New-file line number of an added line in the diff" },
         body: { type: "string", description: "The comment text" },
       },
       required: ["path", "line", "body"],
@@ -79,7 +81,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     parameters: {
       type: "object",
       properties: {
-        commentId: { type: "integer", description: "ID of an existing review comment" },
+        commentId: { type: ["integer", "string"], description: "ID of an existing review comment" },
         body: { type: "string", description: "The reply text" },
       },
       required: ["commentId", "body"],
