@@ -160,12 +160,31 @@ export async function fetchPendingReviewsWithComments(
 }
 
 /**
- * Deletes a PENDING (draft) review this agent previously created, removing its
- * comments at the same time. GitHub's REST API only permits deleting reviews in
- * the PENDING state (submitted reviews can never be deleted). This is the only
- * clean way to clear our own draft before posting a fresh one at a new head:
- * deleting just the comments can leave an empty pending review behind, which
- * still blocks creating another review (HTTP 422 "only one pending review").
+ * Deletes a single review comment this agent previously posted on a PENDING
+ * (draft) review. GitHub cannot update a pending review, so clearing our own
+ * draft means deleting each of our comments individually rather than the whole
+ * review — deleting the entire review would also remove any comment a human
+ * added via the GitHub UI. The endpoint is the same one the GitHub UI uses.
+ * Note the URL has no PR number: `pulls/comments/{id}`, not `pulls/{n}/comments/{id}`.
+ */
+export async function deleteDraftComment(
+  client: GitHubClient,
+  opts: { owner: string; repo: string; number: number },
+  commentId: number,
+): Promise<void> {
+  await client.rest<{ id: number }>(
+    "DELETE",
+    `/repos/${opts.owner}/${opts.repo}/pulls/comments/${commentId}`,
+  );
+}
+
+/**
+ * Deletes a PENDING (draft) review. GitHub's REST API only permits deleting
+ * reviews in the PENDING state (submitted reviews can never be deleted). This
+ * is used to remove the now-empty review shell after this agent deletes its own
+ * comments from a review it fully owned, so the one-pending-review-per-user
+ * slot frees up for a fresh review. Deleting an empty review removes no comment
+ * a human wrote.
  */
 export async function deletePendingReview(
   client: GitHubClient,

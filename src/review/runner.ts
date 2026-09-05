@@ -7,6 +7,7 @@ import {
   ReviewCommentView,
   fetchReviewComments,
   fetchPendingReviewsWithComments,
+  deleteDraftComment,
   deletePendingReview,
 } from "../github/comments.js";
 import { fetchPrFiles, addedLineNumbers, PrFile } from "../github/diffs.js";
@@ -235,13 +236,19 @@ export async function reviewSinglePr(
       };
     }
 
-    // Clear any pending draft review this agent itself created in an earlier
-    // round, so a re-review posts a fresh review without duplicating comments.
-    // Comments or reviews a human adds manually (e.g. via the GitHub UI) are
-    // NEVER deleted: if any pending draft contains a comment we did not create,
-    // or is an unattributed empty draft, we refuse to post rather than risk
-    // clobbering that work (GitHub allows only one pending review per user).
-    const ownedIds = new Set(record?.draftCommentIds ?? []);
+    // Clear this agent's own earlier draft review so a re-review posts a fresh
+    // review without duplicating comments. Comments a human adds manually (e.g.
+    // via the GitHub UI) are NEVER deleted: we delete only the individual
+    // comments we posted previously (tracked in the record's draftCommentIds),
+    // never the whole review. Reviews this agent creates always have an empty
+    // body, and GitHub removes such a review automatically once its last
+    // comment is deleted — so once our comments are gone the emptied review is
+    // gone with them and the one-pending-review-per-user slot frees up. An
+    // empty pending draft (a "ghost") holds no comments at all, so it is worth
+    // deleting outright to unblock posting. A review still holding comments we
+    // did not create is left alone and blocks posting rather than risk
+    // clobbering it (GitHub allows only one pending review per user).
+    const ownedIds = new Set((record?.draftCommentIds ?? []).map(String));
     const pendingReviews = await fetchPendingReviewsWithComments(client, {
       owner: ref.owner,
       repo: ref.repo,
@@ -249,20 +256,25 @@ export async function reviewSinglePr(
     });
     for (const pending of pendingReviews) {
       if (pending.comments.length === 0) {
-        blockedReason =
-          "An empty pending draft review exists on the PR. Not posting, to avoid clobbering " +
-          "a draft we do not own (discard it in the GitHub UI first).";
-        break;
-      }
-      const fullyOurs =
-        ownedIds.size > 0 && pending.comments.every((c) => ownedIds.has(String(c.id)));
-      if (fullyOurs) {
-        await deletePendingReview(
+        // Ghost: an empty pending review with no inline comments. Nothing a
+        // human wrote is lost by removing it, so delete it to free the slot.
+        await deletePendingReviewBestEffort(
           client,
           { owner: ref.owner, repo: ref.repo, number: ref.number },
           pending.reviewId,
         );
-      } else {
+        continue;
+      }
+      const ours = pending.comments.filter((c) => ownedIds.has(String(c.id)));
+      const theirs = pending.comments.filter((c) => !ownedIds.has(String(c.id)));
+      for (const comment of ours) {
+        await deleteDraftCommentBestEffort(
+          client,
+          { owner: ref.owner, repo: ref.repo, number: ref.number },
+          comment.id,
+        );
+      }
+      if (theirs.length > 0) {
         blockedReason =
           "A pending draft review still contains comments not created by this agent " +
           "(likely added via the GitHub UI). Not posting, to avoid deleting or overwriting them.";
@@ -339,6 +351,46 @@ function dedupeComments(
 
 function commentKey(path: string, line: number, body: string): string {
   return `${path}:${line}:${body.trim()}`;
+}
+
+/**
+ * True when the error is a GitHub 404 (e.g. a review comment or a whole review
+ * that has already disappeared). Deletion is idempotent: whatever we wanted
+ * gone is already gone, so these are tolerated rather than treated as failures.
+ */
+function isNotFound(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /HTTP 404|Not Found/i.test(message);
+}
+
+/** Deletes a single draft comment, accepting that it may already be deleted. */
+async function deleteDraftCommentBestEffort(
+  client: GitHubClient,
+  opts: { owner: string; repo: string; number: number },
+  commentId: number,
+): Promise<void> {
+  try {
+    await deleteDraftComment(client, opts, commentId);
+  } catch (err) {
+    if (!isNotFound(err)) {
+      throw err;
+    }
+  }
+}
+
+/** Deletes a pending review, accepting that it may already be removed. */
+async function deletePendingReviewBestEffort(
+  client: GitHubClient,
+  opts: { owner: string; repo: string; number: number },
+  reviewId: number,
+): Promise<void> {
+  try {
+    await deletePendingReview(client, opts, reviewId);
+  } catch (err) {
+    if (!isNotFound(err)) {
+      throw err;
+    }
+  }
 }
 
 function defaultOwner(config: Config): string {

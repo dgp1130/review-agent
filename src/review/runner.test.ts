@@ -450,7 +450,7 @@ describe("reviewSinglePr", () => {
     expect(record.draftCommentIds).toEqual([]);
   });
 
-  it("deletes only its own prior draft comments before posting a fresh review", async () => {
+  it("deletes only its own prior draft comments, letting GitHub drop the emptied review, before posting a fresh review", async () => {
     const files: unknown[] = [
       { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
     ];
@@ -506,15 +506,161 @@ describe("reviewSinglePr", () => {
       },
     });
 
-    // The agent's own pending review was deleted wholesale, then a fresh one posted.
+    // The agent's own comments are deleted individually (never comments it did
+    // not create). The review this agent created has an empty body, so GitHub
+    // removes it automatically once its only comment is gone — no separate
+    // review delete is needed, and the pending-review slot frees up for the
+    // fresh review.
     expect(calls.filter((c) => c.method === "DELETE").map((c) => c.endpoint)).toEqual([
-      "/repos/dgp1130/review-agent/pulls/9/reviews/7",
+      "/repos/dgp1130/review-agent/pulls/comments/101",
     ]);
     expect(outcome.posted).toBeDefined();
     expect(outcome.reviewedAtHead).toBe(false);
     const newRecord = state.prs[prKey("dgp1130", "review-agent", 9)];
     expect(newRecord.lastReviewedCommitSha).toBe("shaz");
     expect(newRecord.draftReviewId).toBe("2000");
+  });
+
+  it("deletes only the agent's own comments from a mixed pending review, then blocks", async () => {
+    // Simulates a human having added comment 999 to the agent's own pending
+    // review (7, holding agent comment 101) via the GitHub UI. The agent must
+    // remove only its own comment, keep the human's, and refuse to post (a
+    // pending review still occupies the one-pending-review-per-user slot).
+    const files: unknown[] = [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
+    ];
+    const calls: { method: string; endpoint: string; body?: unknown }[] = [];
+    const client = {
+      graphql: async () => ({
+        repository: {
+          pullRequest: rawNode(info({ isReviewRequested: true, headRefOid: "shaz", number: 9 })),
+        },
+      }),
+      rest: async (method: string, endpoint: string, body?: unknown) => {
+        calls.push({ method, endpoint, body });
+        if (method === "GET" && endpoint.includes("/files?per_page=100")) {
+          return files;
+        }
+        if (method === "GET" && endpoint.includes("/comments?per_page=100")) {
+          return [];
+        }
+        if (method === "GET" && endpoint.includes("/reviews?per_page=100")) {
+          return [{ id: 7, state: "PENDING" }];
+        }
+        if (method === "GET" && endpoint.includes("/reviews/7/comments")) {
+          return [
+            { id: 101, path: "M1-test.txt", line: 2, body: "Old agent comment.", created_at: "t" },
+            { id: 999, path: "M1-test.txt", line: 1, body: "Manual UI comment.", created_at: "t" },
+          ];
+        }
+        if (method === "GET" && endpoint.includes("/pulls/")) {
+          return [];
+        }
+        return [];
+      },
+    };
+    const state = emptyState();
+    const record = makePrRecord("dgp1130", "review-agent", 9, "shax");
+    record.draftCommentIds = ["101"];
+    record.draftReviewId = "7";
+    state.prs[prKey("dgp1130", "review-agent", 9)] = record;
+
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: {
+        complete: async () => ({
+          content: "",
+          toolCalls: [
+            { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 2, body: "Fresh agent comment." } },
+          ],
+        }),
+      },
+    });
+
+    // Only the agent's own comment was deleted; the review (with the human's
+    // comment still in it) was left alone and nothing new was posted.
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.endpoint)).toEqual([
+      "/repos/dgp1130/review-agent/pulls/comments/101",
+    ]);
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+    expect(outcome.posted).toBeUndefined();
+    expect(outcome.reason).toMatch(/not created by this agent/);
+    // The head is still recorded so this is not re-attempted every tick.
+    expect(outcome.reviewedAtHead).toBe(true);
+  });
+
+  it("deletes an unattributed empty pending draft (ghost) and then posts a fresh review", async () => {
+    // An empty pending review holds no comments at all, so removing it cannot
+    // lose anything a human wrote. It is deleted to free the one-pending-review
+    // slot, unblocking the agent from posting (issue #12: a "ghost" review
+    // otherwise blocks new reviews permanently).
+    const files: unknown[] = [
+      { filename: "M1-test.txt", status: "added", additions: 3, deletions: 0, changes: 3, patch: "@@ -0,0 +1,3 @@\n+# Test\n+\n+more" },
+    ];
+    const calls: { method: string; endpoint: string; body?: unknown }[] = [];
+    const client = {
+      graphql: async () => ({
+        repository: {
+          pullRequest: rawNode(info({ isReviewRequested: true, headRefOid: "shax", number: 9 })),
+        },
+      }),
+      rest: async (method: string, endpoint: string, body?: unknown) => {
+        calls.push({ method, endpoint, body });
+        if (method === "GET" && endpoint.includes("/files?per_page=100")) {
+          return files;
+        }
+        if (method === "GET" && endpoint.includes("/comments?per_page=100")) {
+          return [];
+        }
+        if (method === "GET" && endpoint.includes("/reviews?per_page=100")) {
+          return [{ id: 7, state: "PENDING" }];
+        }
+        if (method === "GET" && endpoint.includes("/reviews/7/comments")) {
+          return [];
+        }
+        if (method === "POST" && endpoint.endsWith("/reviews")) {
+          return { id: 2000, state: "PENDING" };
+        }
+        if (method === "GET" && endpoint.includes("/reviews/2000/comments")) {
+          return [{ id: 201, path: "M1-test.txt", line: 1, body: "Missing heading.", created_at: "t" }];
+        }
+        if (method === "GET" && endpoint.includes("/pulls/")) {
+          return [];
+        }
+        return [];
+      },
+    };
+    const state = emptyState();
+
+    const outcome = await reviewSinglePr(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, "dgp1130", state, {
+      skillContent: "# Review skill",
+      config: makeConfig(),
+      allowListedOwners: [],
+      provider: {
+        complete: async () => ({
+          content: "",
+          toolCalls: [
+            { id: "c1", name: "create_comment", arguments: { path: "M1-test.txt", line: 1, body: "Missing heading." } },
+          ],
+        }),
+      },
+    });
+
+    // The empty ghost review was deleted (not posted around), then a fresh
+    // review was posted with the new comment.
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.endpoint)).toEqual([
+      "/repos/dgp1130/review-agent/pulls/9/reviews/7",
+    ]);
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(outcome.posted).toBeDefined();
+    expect(outcome.posted?.reviewId).toBe(2000);
+    expect(outcome.reviewedAtHead).toBe(false);
+    const record = state.prs[prKey("dgp1130", "review-agent", 9)];
+    expect(record.lastReviewedCommitSha).toBe("shax");
+    expect(record.draftCommentIds).toEqual(["201"]);
+    expect(record.draftReviewId).toBe("2000");
   });
 
   it("does not repost a comment that already exists on the PR", async () => {

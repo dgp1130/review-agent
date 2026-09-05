@@ -3,6 +3,7 @@ import {
   postDraftReview,
   fetchReviewComments,
   fetchPendingReviewsWithComments,
+  deleteDraftComment,
   deletePendingReview,
   DraftComment,
 } from "./comments.js";
@@ -141,6 +142,17 @@ describe("fetchPendingReviewsWithComments", () => {
     });
     const pending = await fetchPendingReviewsWithComments(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 });
     expect(pending).toEqual([]);
+  });
+});
+
+describe("deleteDraftComment", () => {
+  it("deletes a single review comment by comment ID", async () => {
+    const client = new FakeClient({
+      "DELETE /repos/dgp1130/review-agent/pulls/comments/101": { id: 101 },
+    });
+    await deleteDraftComment(client as never, { owner: "dgp1130", repo: "review-agent", number: 9 }, 101);
+    const calls = client.calls().filter((c) => c.method === "DELETE");
+    expect(calls.map((c) => c.endpoint)).toEqual(["/repos/dgp1130/review-agent/pulls/comments/101"]);
   });
 });
 
