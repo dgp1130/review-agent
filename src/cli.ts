@@ -1,4 +1,5 @@
 import { accessSync, readFileSync } from "node:fs";
+import { parseArgs as nodeParseArgs } from "node:util";
 
 export interface CliOptions {
   kind: "ok";
@@ -15,43 +16,35 @@ export interface CliError {
 export type CliResult = CliOptions | CliError;
 
 export function parseArgs(argv: string[]): CliResult {
-  const orgs: string[] = [];
-  let skillPath: string | undefined;
-  let prUrl: string | undefined;
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--pr") {
-      const value = argv[++i];
-      if (value === undefined) {
-        return { kind: "cli", message: "--pr requires a PR URL argument." };
-      }
-      prUrl = value;
-    } else if (arg.startsWith("--orgs=")) {
-      orgs.push(...arg.slice("--orgs=".length).split(","));
-    } else if (arg === "--orgs") {
-      const value = argv[++i];
-      if (value === undefined) {
-        return { kind: "cli", message: "--orgs requires a comma-separated list argument." };
-      }
-      orgs.push(...value.split(","));
-    } else if (arg === "--help" || arg === "-h") {
-      return { kind: "cli", message: usage() };
-    } else if (arg.startsWith("--")) {
-      return { kind: "cli", message: `Unknown option: ${arg}` };
-    } else {
-      if (skillPath !== undefined) {
-        return { kind: "cli", message: "Too many positional arguments; expected a single skill file path." };
-      }
-      skillPath = arg;
-    }
+  let values: { pr?: string; orgs?: string; help?: boolean };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = nodeParseArgs({
+      args: argv,
+      options: {
+        pr: { type: "string" },
+        orgs: { type: "string" },
+        help: { type: "boolean", short: "h" },
+      },
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    return { kind: "cli", message: err instanceof Error ? err.message : String(err) };
   }
 
+  if (values.help) {
+    return { kind: "cli", message: usage() };
+  }
+  if (positionals.length > 1) {
+    return { kind: "cli", message: "Too many positional arguments; expected a single skill file path." };
+  }
+  const skillPath = positionals[0];
   if (skillPath === undefined) {
     return { kind: "cli", message: usage() };
   }
 
-  return { kind: "ok", skillPath, prUrl, orgs };
+  const orgs = values.orgs === undefined ? [] : values.orgs.split(",");
+  return { kind: "ok", skillPath, prUrl: values.pr, orgs };
 }
 
 export function usage(): string {

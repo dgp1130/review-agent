@@ -39,6 +39,20 @@ describe("parseArgs", () => {
     const result = parseArgs(["a.md", "b.md"]);
     expect(result.kind).toBe("cli");
   });
+
+  it("prints usage for --help and -h", () => {
+    for (const flag of ["--help", "-h"]) {
+      const result = parseArgs([flag]);
+      expect(result.kind).toBe("cli");
+      if (result.kind === "ok") return;
+      expect(result.message).toContain("Usage:");
+    }
+  });
+
+  it("rejects --pr without a value", () => {
+    const result = parseArgs(["skill.md", "--pr"]);
+    expect(result.kind).toBe("cli");
+  });
 });
 
 describe("readSkillFile", () => {
