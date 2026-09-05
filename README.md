@@ -4,6 +4,14 @@ An AI agent for reviewing GitHub PRs based on a skill.
 
 ## Local development
 
+Requires Node.js (pinned in `.nvmrc`). Using `nvm`, install the pinned version with:
+
+```sh
+nvm install
+```
+
+Then install dependencies and run the usual scripts:
+
 ```sh
 npm install
 npm run build   # tsc -> dist/
