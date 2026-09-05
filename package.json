@@ -19,6 +19,10 @@
     "lint:fix": "eslint . --fix",
     "check": "pnpm run lint && pnpm run typecheck && pnpm test"
   },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.43",
+    "ai": "^7.0.92"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
