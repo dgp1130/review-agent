@@ -4,6 +4,12 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Optional thought signature returned by thinking models (e.g. Gemini's
+   * `extra_content.google.thought_signature`), which must be echoed back when
+   * replaying the assistant turn.
+   */
+  thoughtSignature?: string;
 }
 
 export interface ChatMessage {

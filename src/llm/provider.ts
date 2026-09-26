@@ -140,17 +140,53 @@ function isTransientLlmError(err: unknown): boolean {
 function llmErrorMessage(err: unknown, baseUrl: string): string {
   if (err instanceof APICallError) {
     const status = err.statusCode === undefined ? "" : ` (${err.statusCode})`;
-    return `LLM request failed${status} against ${baseUrl}: ${err.message || err.responseBody || "unknown error"}`;
+    return `LLM request failed${status} against ${baseUrl}: ${extractApiErrorDetail(err)}`;
   }
   return err instanceof Error ? err.message : String(err);
 }
 
+function extractApiErrorDetail(err: APICallError): string {
+  const body = err.responseBody?.trim();
+  if (body) {
+    try {
+      const parsed: unknown = JSON.parse(body);
+      const entry = Array.isArray(parsed) ? (parsed[0] as unknown) : parsed;
+      if (typeof entry === "object" && entry !== null && "error" in entry) {
+        const errObj = (entry as { error?: unknown }).error;
+        if (typeof errObj === "object" && errObj !== null && "message" in errObj) {
+          const msg = (errObj as { message?: unknown }).message;
+          if (typeof msg === "string" && msg.trim().length > 0) {
+            return msg.trim();
+          }
+        }
+      }
+    } catch {
+      // Fall through to raw message / responseBody.
+    }
+  }
+  if (err.message && body && !err.message.includes(body)) {
+    return `${err.message} (${body.slice(0, 300)})`;
+  }
+  return err.message || body || "unknown error";
+}
+
 function toToolCall(tc: TypedToolCall<ToolSet>): ToolCall {
+  const thoughtSignature = extractThoughtSignature(tc);
   return {
     id: tc.toolCallId,
     name: tc.toolName,
     arguments: (tc.input ?? {}) as Record<string, unknown>,
+    ...(thoughtSignature ? { thoughtSignature } : {}),
   };
+}
+
+function extractThoughtSignature(tc: TypedToolCall<ToolSet>): string | undefined {
+  const meta = tc.providerMetadata;
+  if (!meta) {
+    return undefined;
+  }
+  const sig = meta["openai-compatible"]?.thoughtSignature ?? meta.google?.thoughtSignature;
+  return typeof sig === "string" && sig.length > 0 ? sig : undefined;
 }
 
 /**
@@ -178,6 +214,9 @@ function toModelMessage(m: ChatMessage): ModelMessage {
               toolCallId: tc.id,
               toolName: tc.name,
               input: tc.arguments,
+              ...(tc.thoughtSignature
+                ? { providerOptions: { google: { thoughtSignature: tc.thoughtSignature } } }
+                : {}),
             })),
           ]
         : m.content;

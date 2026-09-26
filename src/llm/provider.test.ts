@@ -108,6 +108,65 @@ describe("OpenAiCompatibleProvider.complete", () => {
     expect(messages[1]).toEqual({ role: "tool", tool_call_id: "c1", content: "file contents" });
   });
 
+  it("round-trips Gemini thought_signature on tool_calls across turns", async () => {
+    const sentBodies: Record<string, unknown>[] = [];
+    let call = 0;
+    const fetchImpl = async (_url: string, init: RequestInit) => {
+      call += 1;
+      sentBodies.push(JSON.parse(init.body as string) as Record<string, unknown>);
+      if (call === 1) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "c1",
+                      type: "function",
+                      function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+                      extra_content: { google: { thought_signature: "sig-xyz" } },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        );
+      }
+      return textResponse("done");
+    };
+
+    const p = provider(fetchImpl as typeof fetch);
+    const turn1 = await p.complete({ messages: [{ role: "user", content: "hi" }] });
+    expect(turn1.toolCalls).toEqual([
+      { id: "c1", name: "read_file", arguments: { path: "a.ts" }, thoughtSignature: "sig-xyz" },
+    ]);
+
+    await p.complete({
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: turn1.content ?? "", toolCalls: turn1.toolCalls },
+        { role: "tool", toolCallId: "c1", content: "file contents" },
+      ],
+    });
+
+    const messages = sentBodies[1].messages as Record<string, unknown>[];
+    expect(messages[1]).toEqual({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: "c1",
+          type: "function",
+          function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+          extra_content: { google: { thought_signature: "sig-xyz" } },
+        },
+      ],
+    });
+  });
+
   it("throws on fatal 4xx responses without retrying", async () => {
     let calls = 0;
     const fetchImpl = async () => {
@@ -116,6 +175,17 @@ describe("OpenAiCompatibleProvider.complete", () => {
     };
     await expect(provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(/404/);
     expect(calls).toBe(1);
+  });
+
+  it("surfaces the error message from Gemini array-wrapped error responses", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify([{ error: { code: 400, message: "Function call is missing a thought_signature" } }]),
+        { status: 400, statusText: "Bad Request" },
+      );
+    await expect(provider(fetchImpl).complete({ messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(
+      /Function call is missing a thought_signature/,
+    );
   });
 
   it("retries transient 5xx responses and succeeds", async () => {
