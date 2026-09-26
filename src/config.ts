@@ -4,13 +4,10 @@ import { mkdirSync } from "node:fs";
 
 export interface Config {
   skillPath: string;
-  repo: string;
   orgs: string[];
   /** Absolute path to the persistent state file (lives under dist/). */
   statePath: string;
 }
-
-const DEFAULT_REPO = "dgp1130/review-agent";
 
 /**
  * Resolves the state file path to be inside dist/, matching the compiled output
@@ -23,7 +20,6 @@ export function defaultStatePath(): string {
 
 export function buildConfig(opts: {
   skillPath: string;
-  repo?: string;
   orgs?: string[];
   statePath?: string;
 }): Config {
@@ -38,7 +34,6 @@ export function buildConfig(opts: {
 
   return {
     skillPath: opts.skillPath,
-    repo: opts.repo ?? DEFAULT_REPO,
     orgs,
     statePath,
   };
@@ -50,14 +45,10 @@ function dedupe(values: string[]): string[] {
 
 /**
  * Whether a repository (owner/name) is in scope for posting comments and
- * monitoring: it must be the default repo or belong to an allowlisted org.
- * This gates every repo the agent may touch regardless of how a PR was
- * discovered (including the `--pr` mode and fork PRs).
+ * monitoring: it must belong to an allowlisted org. This gates every repo the
+ * agent may touch regardless of how a PR was discovered (including the `--pr`
+ * mode and fork PRs).
  */
-export function isRepoAllowed(config: Config, owner: string, name: string): boolean {
-  const [defaultOwner, defaultName] = config.repo.split("/");
-  if (owner === defaultOwner && name === defaultName) {
-    return true;
-  }
+export function isRepoAllowed(config: Config, owner: string, _name?: string): boolean {
   return config.orgs.includes(owner);
 }

@@ -41,7 +41,6 @@ export async function runTick(opts: DaemonOptions): Promise<TickSummary> {
   const summary: TickSummary = { discovered: 0, reviewed: 0, skipped: 0, errors: 0, pruned: 0 };
 
   const candidates = await listCandidatePrs(opts.client, {
-    repo: opts.config.repo,
     orgs: opts.config.orgs,
     username: opts.username,
   });

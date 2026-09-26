@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listCandidatePrs, scopeForOrg, scopeForRepo } from "./prs.js";
+import { listCandidatePrs, scopeForOrg } from "./prs.js";
 
 interface FakeGraphQL {
   captureQuery: (query: string, variables: Record<string, unknown>) => unknown;
@@ -40,7 +40,7 @@ function node(overrides: Partial<FakeSearchItem> & { number: number }): FakeSear
 }
 
 describe("listCandidatePrs", () => {
-  it("runs queries scoped to the default repo and each allowlisted org, for both qualifiers", async () => {
+  it("runs queries scoped to each allowlisted org, for both qualifiers", async () => {
     const captured: string[] = [];
     const client = new FakeClient({
       captureQuery: (_query, variables) => {
@@ -48,12 +48,12 @@ describe("listCandidatePrs", () => {
         return { search: { nodes: [] } };
       },
     });
-    await listCandidatePrs(client as never, { repo: "dgp1130/review-agent", orgs: ["acme"], username: "dgp1130" });
+    await listCandidatePrs(client as never, { orgs: ["dgp1130", "acme"], username: "dgp1130" });
     // Expect one query per (scope, qualifier) pair: 2 scopes x 2 qualifiers.
     expect(captured).toHaveLength(4);
     const all = captured.join(" ");
-    expect(all).toContain("repo:dgp1130/review-agent review-requested:dgp1130");
-    expect(all).toContain("repo:dgp1130/review-agent assignee:dgp1130");
+    expect(all).toContain("org:dgp1130 review-requested:dgp1130");
+    expect(all).toContain("org:dgp1130 assignee:dgp1130");
     expect(all).toContain("org:acme review-requested:dgp1130");
     expect(all).toContain("org:acme assignee:dgp1130");
   });
@@ -70,8 +70,7 @@ describe("listCandidatePrs", () => {
       }),
     });
     const result = await listCandidatePrs(client as never, {
-      repo: "dgp1130/review-agent",
-      orgs: [],
+      orgs: ["dgp1130"],
       username: "dgp1130",
     });
     expect(result.map((p) => p.number)).toEqual([1, 2]);
@@ -95,8 +94,7 @@ describe("listCandidatePrs", () => {
       }),
     });
     const result = await listCandidatePrs(client as never, {
-      repo: "dgp1130/review-agent",
-      orgs: [],
+      orgs: ["dgp1130"],
       username: "dgp1130",
     });
     expect(result[0].isReviewRequested).toBe(true);
@@ -107,8 +105,7 @@ describe("listCandidatePrs", () => {
 });
 
 describe("scopes", () => {
-  it("formats repo and org scopes", () => {
-    expect(scopeForRepo("a/b")).toBe("repo:a/b");
+  it("formats org scopes", () => {
     expect(scopeForOrg("acme")).toBe("org:acme");
   });
 });

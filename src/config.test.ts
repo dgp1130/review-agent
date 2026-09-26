@@ -4,9 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("buildConfig", () => {
-  it("uses default repo and orgs", () => {
+  it("uses default orgs", () => {
     const cfg = buildConfig({ skillPath: "skill.md" });
-    expect(cfg.repo).toBe("dgp1130/review-agent");
     expect(cfg.orgs).toEqual([]);
     expect(cfg.statePath).toMatch(/state\.json$/);
   });
@@ -28,14 +27,10 @@ describe("buildConfig", () => {
 });
 
 describe("isRepoAllowed", () => {
-  it("allows the default repo", () => {
-    const cfg = buildConfig({ skillPath: "skill.md", orgs: ["acme"] });
-    expect(isRepoAllowed(cfg, "dgp1130", "review-agent")).toBe(true);
-  });
-
   it("allows repos in allowlisted orgs and rejects others", () => {
     const cfg = buildConfig({ skillPath: "skill.md", orgs: ["acme"] });
     expect(isRepoAllowed(cfg, "acme", "anything")).toBe(true);
+    expect(isRepoAllowed(cfg, "dgp1130", "review-agent")).toBe(false);
     expect(isRepoAllowed(cfg, "other-org", "thing")).toBe(false);
   });
 });

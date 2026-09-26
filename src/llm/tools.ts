@@ -48,7 +48,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "read_other_file",
     description:
-      "Read a file from another repository (only repos owned by the default repo owner or allowlisted orgs). Useful for context that is not part of the PR.",
+      "Read a file from another repository (only repos owned by allowlisted orgs). Useful for context that is not part of the PR.",
     parameters: {
       type: "object",
       properties: {

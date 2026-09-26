@@ -53,8 +53,7 @@ export function usage(): string {
     "",
     "  <skill.md>       Path to a skill/Markdown file whose content guides the review.",
     "  --pr <url>       Review a single PR and exit (e.g. https://github.com/OWNER/REPO/pull/123).",
-    "  --orgs <list>    Comma-separated GitHub orgs to monitor for PRs in addition to the",
-    "                   default repository.",
+    "  --orgs <list>    Comma-separated GitHub orgs to monitor for PRs.",
   ].join("\n");
 }
 

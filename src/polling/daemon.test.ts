@@ -85,8 +85,7 @@ class FakeClient {
 function makeConfig(): Config {
   return {
     skillPath: "SKILL.md",
-    repo: "dgp1130/review-agent",
-    orgs: [],
+    orgs: ["dgp1130"],
     statePath: "/tmp/state-daemon.json",
   };
 }

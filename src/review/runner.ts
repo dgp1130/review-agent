@@ -203,7 +203,7 @@ export async function reviewSinglePr(
         headOwner: info.headOwner,
         headRepo: info.headRepo,
       },
-      isOwnerAllowed: (owner) => opts.allowListedOwners.includes(owner) || owner === defaultOwner(opts.config),
+      isOwnerAllowed: (owner) => opts.allowListedOwners.includes(owner) || opts.config.orgs.includes(owner),
       changedPaths,
       addedLines,
     },
@@ -391,10 +391,6 @@ async function deletePendingReviewBestEffort(
       throw err;
     }
   }
-}
-
-function defaultOwner(config: Config): string {
-  return config.repo.split("/")[0];
 }
 
 /** Maps a stored state message into the LLM message shape. Only text turns are

@@ -112,26 +112,25 @@ function toInfo(n: PrSearchItem, username: string): PullRequestInfo {
 }
 
 /**
- * Discovers open PRs across the given repositories/orgs where the current user
- * is a requested reviewer or assignee. Fork (cross-repository) PRs are
- * included: comments are never posted to the fork itself, and discovery is
- * scoped to the allowlisted repo/orgs, so the base repo of any discovered PR
- * is always within the allowed scope.
+ * Discovers open PRs across the given orgs where the current user is a
+ * requested reviewer or assignee. Fork (cross-repository) PRs are included:
+ * comments are never posted to the fork itself, and discovery is scoped to the
+ * allowlisted orgs, so the base repo of any discovered PR is always within the
+ * allowed scope.
  *
  * We run one search per (scope, qualifier) pair and union the results instead
  * of combining qualifiers in a single query, because GitHub's search API
- * misbehaves when `review-requested` and `assignee` (or `repo:` and `org:`)
- * are combined with parentheses/OR in one query.
+ * misbehaves when `review-requested` and `assignee` (or multiple `org:`) are
+ * combined with parentheses/OR in one query.
  */
 export async function listCandidatePrs(
   client: GitHubClient,
-  opts: { repo: string; orgs: string[]; username: string },
+  opts: { orgs: string[]; username: string },
 ): Promise<PullRequestInfo[]> {
   const scopes: string[] = [];
   for (const org of opts.orgs) {
     scopes.push(scopeForOrg(org));
   }
-  scopes.push(scopeForRepo(opts.repo));
 
   const seen = new Set<string>();
   const results: PullRequestInfo[] = [];
@@ -170,11 +169,6 @@ export async function fetchPrByRef(
     return undefined;
   }
   return toInfo(pr, username);
-}
-
-export function scopeForRepo(repo: string): string {
-  const [owner, name] = repo.split("/");
-  return `repo:${owner}/${name}`;
 }
 
 export function scopeForOrg(org: string): string {

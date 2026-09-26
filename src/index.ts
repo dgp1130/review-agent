@@ -37,7 +37,6 @@ async function main(argv: string[]): Promise<number> {
   try {
     config = buildConfig({
       skillPath: options.skillPath,
-      repo: "dgp1130/review-agent",
       orgs: options.orgs,
     });
   } catch (err) {
@@ -56,7 +55,7 @@ async function main(argv: string[]): Promise<number> {
     if (!isRepoAllowed(config, ref.owner, ref.repo)) {
       return fatal(
         new Error(
-          `Refusing to review ${ref.owner}/${ref.repo}: not the default repo nor an allowlisted org (--orgs).`,
+          `Refusing to review ${ref.owner}/${ref.repo}: not in an allowlisted org (--orgs).`,
         ),
       );
     }
